@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import random
 from datetime import date
 
@@ -152,12 +153,22 @@ class FakeBot(Bot):
         self.onebot.self_id = BOT_QQ
         self.sent = []
         self.roles = {}
+        self.notices = []
+        self.notice_ids = itertools.count(1)
 
         async def call(action, **params):
             if action == "send_group_msg":
                 self.sent.append(("group", params["group_id"], _text(params["message"])))
             elif action == "send_private_msg":
                 self.sent.append(("private", params["user_id"], _text(params["message"])))
+            elif action == "_get_group_notice":
+                return [dict(n) for n in self.notices]
+            elif action == "_send_group_notice":
+                text = params["content"].replace("\n", "&#10;")  # QQ 返回的正文是 HTML 转义过的
+                self.notices.append({"notice_id": f"n{next(self.notice_ids)}", "sender_id": BOT_QQ,
+                                     "message": {"text": text}})
+            elif action == "_del_group_notice":
+                self.notices = [n for n in self.notices if n["notice_id"] != params["notice_id"]]
             elif action == "get_group_member_info":
                 return {"role": self.roles.get((params["group_id"], params["user_id"]), "member"),
                         "card": f"名片{params['user_id']}"}
@@ -283,3 +294,18 @@ def test_roulette_bang_records_and_announces(fb):
 def test_card_command_in_group(fb):
     feed(fb, msg(200, P[1], ".存卡 调查员"))
     assert fb.sent[-1][2] == "人物卡指令请私聊骰娘使用。"
+
+
+def test_ledger_change_replaces_group_notice(fb):
+    fb.notices = [
+        {"notice_id": "old", "sender_id": BOT_QQ, "message": {"text": "【记团名单】&#10;旧名单"}},
+        {"notice_id": "rules", "sender_id": BOT_QQ, "message": {"text": "【幻梦境赌场】&#10;群规"}},
+        {"notice_id": "human", "sender_id": P[1], "message": {"text": "【记团名单】&#10;群主手发"}},
+    ]
+    fb.roles[(100, P[6])] = "admin"
+    feed(fb, msg(200, P[6], ".团 加 10001 巧克力 7/20"))
+    ids = [n["notice_id"] for n in fb.notices]
+    assert ids[:2] == ["rules", "human"] and len(ids) == 3
+    assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20）")
+    feed(fb, msg(100, P[6], ".团 消 巧克力"))
+    assert len(fb.notices) == 3 and fb.notices[-1]["message"]["text"].endswith("&#10;暂无。")

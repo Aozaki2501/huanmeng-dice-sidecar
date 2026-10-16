@@ -163,6 +163,14 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
         return RedirectResponse("/settings", status_code=303)
 
     # ---------- 团账本 ----------
+    pending: set[asyncio.Task] = set()
+
+    def refresh_notice_later() -> None:
+        """改完账本后在后台更新大群名单公告，不让网页等它。"""
+        task = asyncio.create_task(bot.refresh_notice())
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
     @app.get("/ledger")
     async def ledger_page(request: Request):
         people: dict[int, dict] = {}
@@ -180,12 +188,14 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
             d = _date(deadline)
             person, _ = bot.ledger.add(int(qq), name, "manual", "web", bot.settings.get("deadline_months"), deadline=d)
             flash(request, f"已记团：{person.entry}")
+            refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
 
     @app.post("/ledger/{record_id}/delete")
     async def ledger_delete(request: Request, record_id: int):
         bot.ledger.delete_record(record_id, "web")
         flash(request, "已删除这条记录")
+        refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
 
     @app.post("/ledger/{record_id}/deadline")
@@ -196,6 +206,7 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
         else:
             bot.ledger.set_deadline(record_id, d, "web")
             flash(request, f"死线已改为 {ledger.md(d)}")
+            refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
 
     @app.post("/members/{qq}/rename")
@@ -203,6 +214,7 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
         if name.strip():
             bot.ledger.rename(qq, name.strip(), "web")
             flash(request, f"已改名为 {name.strip()}")
+            refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
 
     @app.get("/ledger.csv")
@@ -250,6 +262,7 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
                  for n, q, dl in zip(names, qqs, dls)]
         n = bot.ledger.import_people(items, "web")
         flash(request, f"已导入 {len(items)} 人、{n} 条记录")
+        refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
 
     return app

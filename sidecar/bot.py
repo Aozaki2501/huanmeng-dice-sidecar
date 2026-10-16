@@ -1,4 +1,6 @@
 """消息处理：把 OneBot 事件分给各功能。海豹也会收到同样的消息，这里只响应自己的指令。"""
+import asyncio
+import html
 import logging
 import re
 import sqlite3
@@ -64,6 +66,7 @@ class Bot:
         self.repeat = RepeatTracker()
         self.roulette = Roulette()
         self.onebot = OneBot(onebot_url, onebot_token, self.handle_event)
+        self._notice_lock = asyncio.Lock()
 
     # ---------- 分发 ----------
     async def handle_event(self, event: dict) -> None:
@@ -131,6 +134,7 @@ class Bot:
         main = self.settings.get("main_group")
         if main and main != group_id:
             await self.send(("group", main), announce_key, **values)
+        await self.refresh_notice()
 
     async def is_main_group_admin(self, user_id: int) -> bool:
         if user_id in self.settings.get("ledger_admins"):
@@ -199,7 +203,7 @@ class Bot:
             await self.send(("group", group_id), out.key, **out.values)
 
     # ---------- 团账本 ----------
-    async def send_ledger_list(self, target) -> None:
+    def ledger_list_text(self) -> str:
         lines = [self.templates.render_text("ledger.title") or ""]
         rule = "————————————"
         lines.append(rule)
@@ -208,8 +212,29 @@ class Bot:
             lines += ["全部名单：", link, rule]
         people = self.ledger.people()
         lines += [p.entry for p in people] if people else [self.templates.render_text("ledger.empty") or ""]
-        text = "\n".join(line for line in lines if line)
-        await self.deliver(target, [{"type": "text", "data": {"text": text}}], "记团名单")
+        return "\n".join(line for line in lines if line)
+
+    async def send_ledger_list(self, target) -> None:
+        await self.deliver(target, [{"type": "text", "data": {"text": self.ledger_list_text()}}], "记团名单")
+
+    async def refresh_notice(self) -> None:
+        """账本变动后把最新名单发成大群群公告，再删掉骰娘之前发的名单公告。
+        接口不能编辑公告，只能替换；按开头一行与名单标题相同来认旧公告，不动别人发的公告。"""
+        main = self.settings.get("main_group")
+        if not main:
+            return
+        async with self._notice_lock:
+            try:
+                marks = {v.split("\n")[0] for v in self.templates.variants("ledger.title") if v.strip()}
+                notices = await self.onebot.call("_get_group_notice", group_id=main) or []
+                old = [n["notice_id"] for n in notices if n.get("sender_id") == self.onebot.self_id
+                       and html.unescape((n.get("message") or {}).get("text", "")).split("\n")[0] in marks]
+                await self.onebot.call("_send_group_notice", group_id=main, content=self.ledger_list_text(),
+                                       is_show_edit_card=0, tip_window_type=1, confirm_required=0)
+                for notice_id in old:
+                    await self.onebot.call("_del_group_notice", group_id=main, notice_id=notice_id)
+            except Exception as e:  # 公告失败不影响记团本身
+                log.error("更新大群名单公告失败：%s", e)
 
     async def on_ledger(self, event: dict, target, args: str) -> None:
         uid = int(event["user_id"])
@@ -240,6 +265,7 @@ class Bot:
                     await self.send(target, "ledger.removed", name=person.name, deadline=md(deadline), entry=person.entry)
                 else:
                     await self.send(target, "ledger.removed_all", name=person.name, deadline=md(deadline))
+                await self.refresh_notice()
         elif sub in ("加", "add"):
             if not await self.is_main_group_admin(uid):
                 await self.send(target, "ledger.add_denied")
@@ -256,5 +282,6 @@ class Bot:
             person, _ = self.ledger.add(int(qq), name, "manual", str(uid), self.settings.get("deadline_months"),
                                         deadline=deadline)
             await self.send(target, "ledger.added", entry=person.entry)
+            await self.refresh_notice()
         else:
             await self.send(target, "ledger.help")

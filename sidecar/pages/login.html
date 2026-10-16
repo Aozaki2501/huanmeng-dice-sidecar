@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}登录 · 骰娘后台{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 360px; margin: 12vh auto 0;">
+  <h3>骰娘后台</h3>
+  {% if no_password %}
+    <p class="desc">还没有设置管理员密码。请在服务器上运行 <code>uv run python -m sidecar hash-password</code>，把输出填进 config.toml 的 admin_password_hash，然后重启服务。</p>
+  {% else %}
+    <form method="post" action="/login">
+      <p class="desc">请输入管理员密码</p>
+      <input type="password" name="password" autofocus autocomplete="current-password">
+      <div class="row" style="margin-top: 12px;"><button class="primary">登录</button></div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

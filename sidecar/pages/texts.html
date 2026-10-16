@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}文案 · 骰娘后台{% endblock %}
+{% block content %}
+<h1>文案</h1>
+<p class="desc">保存后立即生效。一条文案可以写多个变体，发送时随机选一个；用 <span class="chip">{变量名}</span> 插入变量。</p>
+
+{% for group, items in groups %}
+<h2>{{ group }}</h2>
+{% for item in items %}{% set d = item.defn %}
+<div class="card" id="{{ d.key }}">
+  <h3>{{ d.title }} <span class="chip" style="font-weight: normal;">{{ d.key }}</span></h3>
+  <p class="desc">{{ d.description }}</p>
+  <div class="chips">
+    {% for name, help in d.variables.items() %}<span class="chip" title="{{ help }}">{{ '{' ~ name ~ '}' }} {{ help }}</span>
+    {% else %}<span class="desc" style="margin: 0;">没有可用变量</span>{% endfor %}
+  </div>
+
+  {% for ed in item.editors %}
+  {% if d.per_group %}<div class="scope">{{ '群 ' ~ ed.scope ~ ' 单独设置' if ed.scope else '默认（没有单独设置的群都用这个）' }}{% if ed.customized and not ed.scope %}<span class="tag">已修改</span>{% endif %}</div>
+  {% elif ed.customized %}<div class="tag" style="margin: 0 0 6px;">已修改</div>{% endif %}
+  <form method="post" action="/texts/{{ d.key }}/save" data-key="{{ d.key }}">
+    <input type="hidden" name="scope" value="{{ ed.scope }}">
+    <div class="variants">
+      {% for v in ed.variants %}
+      <div class="variant">
+        <textarea name="variant" rows="{{ [v.count('\n') + 2, 2]|max }}" placeholder="留空表示不发送">{{ v }}</textarea>
+        <div class="preview">{{ ed.previews[loop.index0] or '（空，不发送）' }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="row">
+      <button class="primary">保存</button>
+      <button type="button" class="add-variant">添加变体</button>
+      <span class="spacer"></span>
+      {% if ed.scope %}
+        <button class="link" formaction="/texts/{{ d.key }}/reset" onclick="return confirm('删除群 {{ ed.scope }} 的单独设置？该群将改用默认文案。')">删除单独设置</button>
+      {% elif ed.customized %}
+        <button class="link" formaction="/texts/{{ d.key }}/reset" onclick="return confirm('恢复为默认文案？当前内容会被替换。')">恢复默认</button>
+      {% endif %}
+    </div>
+  </form>
+  {% endfor %}
+
+  {% if d.per_group %}
+  <form method="post" action="/texts/{{ d.key }}/add-group" class="row" style="margin-top: 14px;">
+    <input type="text" name="group_id" placeholder="群号" inputmode="numeric" style="max-width: 180px;">
+    <button>为这个群单独设置</button>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+{% endfor %}
+
+<script>
+  // 输入时实时预览，并提前提示变量写错
+  const timers = new WeakMap();
+  async function refresh(ta) {
+    const key = ta.closest('form').dataset.key;
+    const box = ta.nextElementSibling;
+    const res = await fetch('/texts/preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, text: ta.value}),
+    });
+    const data = await res.json();
+    box.classList.toggle('err', !!data.error);
+    box.textContent = data.error || data.preview || '（空，不发送）';
+  }
+  document.addEventListener('input', e => {
+    if (e.target.name !== 'variant') return;
+    clearTimeout(timers.get(e.target));
+    timers.set(e.target, setTimeout(() => refresh(e.target), 300));
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.classList.contains('add-variant')) return;
+    const list = e.target.closest('form').querySelector('.variants');
+    const div = document.createElement('div');
+    div.className = 'variant';
+    div.innerHTML = '<textarea name="variant" rows="2" placeholder="新变体，留空的变体保存时会被删掉"></textarea><div class="preview">（空，不发送）</div>';
+    list.appendChild(div);
+    div.querySelector('textarea').focus();
+  });
+</script>
+{% endblock %}

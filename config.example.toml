@@ -1,0 +1,18 @@
+# 复制为 config.toml 后修改。改动这个文件需要重启旁路服务；
+# 群号、文案等运行期配置在网页后台修改，不在这里。
+
+[onebot]
+# SnowLuma 的 OneBot v11 正向 WebSocket 地址和 access token（SnowLuma 后台 → 网络配置）
+url = "ws://127.0.0.1:3001"
+token = ""
+
+[web]
+# 后台只监听本机和局域网地址，可以写多个；远程管理走 Tailscale，不要做公网端口转发
+hosts = ["127.0.0.1"]
+port = 3220
+# 运行 `uv run python -m sidecar hash-password` 生成
+admin_password_hash = ""
+
+[paths]
+# 数据库、人物卡图片、日志都放在这里，相对路径以本文件所在目录为准
+data_dir = "data"

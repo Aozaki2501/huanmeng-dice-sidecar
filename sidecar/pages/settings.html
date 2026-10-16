@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}配置 · 骰娘后台{% endblock %}
+{% block content %}
+<h1>配置</h1>
+<p class="desc">保存后立即生效。号码列表每行一个，也可以用空格或逗号分隔。</p>
+<form method="post" action="/settings">
+  {% for f in fields %}{% set d = f.defn %}
+  <div class="card">
+    <label class="field" for="{{ d.key }}">{{ d.title }}</label>
+    <p class="desc">{{ d.help }}</p>
+    {% if d.kind == 'qq_list' %}
+      <textarea id="{{ d.key }}" name="{{ d.key }}" rows="{{ [f.text.count('\n') + 2, 3]|max }}" inputmode="numeric">{{ f.text }}</textarea>
+    {% else %}
+      <input type="text" id="{{ d.key }}" name="{{ d.key }}" value="{{ f.text }}" inputmode="numeric" style="max-width: 240px;">
+    {% endif %}
+    {% if f.error %}<div class="error">{{ f.error }}</div>{% endif %}
+  </div>
+  {% endfor %}
+  <button class="primary">保存配置</button>
+</form>
+{% endblock %}

@@ -1,0 +1,6 @@
+# 第三方运行时（海豹、SnowLuma）不进仓库，部署方按说明自行下载
+runtime/
+.venv/
+__pycache__/
+config.toml
+data/

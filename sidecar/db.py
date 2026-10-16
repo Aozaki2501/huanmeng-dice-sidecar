@@ -28,6 +28,23 @@ MIGRATIONS = [
         after TEXT
     );
     """,
+    # 2: 团账本
+    """
+    CREATE TABLE members (
+        qq INTEGER PRIMARY KEY,
+        name TEXT NOT NULL                -- 名单里显示的名字，后台可改
+    );
+    CREATE TABLE ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        qq INTEGER NOT NULL REFERENCES members(qq),
+        recorded_on TEXT,                 -- 记团日期 YYYY-MM-DD（北京时间），导入的旧记录可能为空
+        deadline TEXT NOT NULL,           -- 死线 YYYY-MM-DD
+        source TEXT NOT NULL,             -- rr / repeat / manual / import
+        removed_at INTEGER,               -- 消团或删除的时间；为空表示仍欠着
+        removed_by TEXT
+    );
+    CREATE INDEX ledger_active ON ledger (qq) WHERE removed_at IS NULL;
+    """,
 ]
 
 

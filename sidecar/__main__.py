@@ -67,7 +67,10 @@ def main() -> None:
             sys.exit("两次输入不一致或为空")
         print(hash_password(pw))
         return
-    asyncio.run(serve(args.config))
+    try:
+        asyncio.run(serve(args.config))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

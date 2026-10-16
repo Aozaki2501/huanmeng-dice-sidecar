@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}团账本 · 骰娘后台{% endblock %}
+{% block content %}
+<div class="row" style="margin-bottom: 8px;">
+  <h1 style="margin: 8px 0;">团账本</h1>
+  <span class="spacer"></span>
+  <a class="btn" href="/ledger/import">导入名单</a>
+  <a class="btn" href="/ledger.csv">导出 CSV</a>
+</div>
+<p class="desc">共 {{ people|length }} 人欠团，按最早死线排序。已过死线的记录标红；骰娘不会自动处理过期记录。</p>
+
+<div class="card">
+  <h3>手动记一团</h3>
+  <form method="post" action="/ledger/add" class="row" style="margin-top: 8px;">
+    <input type="text" name="qq" placeholder="QQ 号" inputmode="numeric" style="max-width: 160px;">
+    <input type="text" name="name" placeholder="名字（已有此人则沿用原名）" style="max-width: 220px;">
+    <input type="date" name="deadline" title="死线，留空则按今天加死线月数计算" style="max-width: 170px;">
+    <button class="primary">记团</button>
+  </form>
+</div>
+
+<table class="ledger">
+  <thead><tr><th>人</th><th>死线</th><th>来源</th><th>记团日期</th><th></th></tr></thead>
+  <tbody>
+  {% for p in people %}
+    {% for r in p.records %}
+    <tr class="{{ 'overdue' if r.deadline < today }} {{ 'first' if loop.first }}">
+      {% if loop.first %}
+      <td rowspan="{{ p.records|length }}" class="who">
+        <form method="post" action="/members/{{ p.qq }}/rename" class="rename">
+          <input type="text" name="name" value="{{ p.name }}" aria-label="名字">
+          <button class="link" title="保存名字">改名</button>
+        </form>
+        <div class="qq">QQ {{ p.qq }}</div>
+      </td>
+      {% endif %}
+      <td>
+        <form method="post" action="/ledger/{{ r.id }}/deadline" class="row nowrap">
+          <input type="date" name="deadline" value="{{ r.deadline }}" required>
+          <button class="link">保存</button>
+        </form>
+      </td>
+      <td>{{ sources.get(r.source, r.source) }}</td>
+      <td class="muted">{{ r.recorded_on or '—' }}</td>
+      <td>
+        <form method="post" action="/ledger/{{ r.id }}/delete" onsubmit="return confirm('删除 {{ p.name }} 死线 {{ r.deadline }} 的这条记录？')">
+          <button class="link danger">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  {% else %}
+    <tr><td colspan="5" class="muted">账本是空的。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

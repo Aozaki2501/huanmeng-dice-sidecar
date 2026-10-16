@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}导入名单 · 骰娘后台{% endblock %}
+{% block content %}
+<h1>导入名单</h1>
+{% if rows is none %}
+<p class="desc">把群里现行的记团名单整段粘贴进来，标题、链接、分隔线会自动跳过，只认 <span class="chip">名字（月/日，月/日）</span> 这样的行。年份取离今天最近的那一年。下一步逐个填上 QQ 号。</p>
+<form method="post" action="/ledger/import">
+  <textarea name="text" rows="14" placeholder="巧克力（7/20）&#10;Flame（11/3，11/30）">{{ text }}</textarea>
+  <div class="row" style="margin-top: 12px;"><button class="primary">下一步</button></div>
+</form>
+{% else %}
+<p class="desc">识别到 {{ rows|length }} 人。请为每个人填上 QQ 号；后台已有同名的人会自动带出。导入会追加记录，不会覆盖账本里已有的记录。</p>
+<form method="post" action="/ledger/import/confirm">
+  <table class="ledger">
+    <thead><tr><th>名字</th><th>死线</th><th>QQ 号</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><input type="text" name="name" value="{{ r.name }}" required></td>
+        <td>{{ r.shown }}<input type="hidden" name="deadlines" value="{{ r.deadlines|join(',') }}"></td>
+        <td><input type="text" name="qq" value="{{ r.qq }}" placeholder="QQ 号" inputmode="numeric" required pattern="[1-9][0-9]{4,11}"></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="row" style="margin-top: 12px;">
+    <button class="primary">确认导入</button>
+    <a class="btn" href="/ledger/import">重新粘贴</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

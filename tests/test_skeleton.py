@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from sidecar import db
 from sidecar import settings as settings_mod
 from sidecar import templates as tpl
-from sidecar.bot import Bot, parse_command, plain_text
+from sidecar.bot import RR_COMMANDS, Bot, parse_command, plain_text
 from sidecar.config import Config, hash_password, verify_password
 from sidecar.web import create_app
 
@@ -102,6 +102,8 @@ def test_parse_command():
     assert parse_command("。取卡1", ("取卡",)) == ("取卡", "1")
     assert parse_command("存卡", ("存卡",)) is None
     assert parse_command(".r 1d100", ("存卡",)) is None
+    assert parse_command(".轮盘 join", RR_COMMANDS) == ("轮盘", "join")
+    assert parse_command(".rr join", RR_COMMANDS) is None
 
 
 def test_plain_text():
@@ -132,3 +134,28 @@ def test_web_login_and_save(tmp_path):
     assert client.post("/texts/preview", json={"key": "card.saved", "text": "存了{name}"}).json() == {"preview": "存了Flame"}
     r = client.post("/settings", data={"main_group": "12345", "deadline_months": "x"})
     assert "需要填整数" in r.text and bot.settings.get("main_group") is None
+
+
+def test_web_ledger_import_and_csv(tmp_path):
+    cfg = Config("ws://x", "", ["127.0.0.1"], 0, hash_password("pw"), tmp_path)
+    bot = Bot(db.connect(tmp_path / "t.db"), "ws://x", "")
+    client = TestClient(create_app(cfg, bot))
+    client.post("/login", data={"password": "pw"})
+    pasted = "【记团名单】\n说明\n————————————\n巧克力（7/20）\nFlame（11/3，11/30）\n乱写（十一月）"
+    r = client.post("/ledger/import", data={"text": pasted})
+    assert "识别到 2 人" in r.text and "跳过" in r.text
+    r = client.post("/ledger/import/confirm", data={
+        "name": ["巧克力", "Flame"], "qq": ["10001", ""], "deadlines": ["2026-07-20", "2026-11-03,2026-11-30"]})
+    assert "还没填 QQ 号" in r.text and bot.ledger.people() == []
+    client.post("/ledger/import/confirm", data={
+        "name": ["巧克力", "Flame"], "qq": ["10001", "10002"], "deadlines": ["2026-07-20", "2026-11-03,2026-11-30"]})
+    assert [p.entry for p in bot.ledger.people()] == ["巧克力（7/20）", "Flame（11/3，11/30）"]
+    page = client.get("/ledger").text
+    assert "QQ 10002" in page and "overdue" in page
+    csv_text = client.get("/ledger.csv").text
+    assert csv_text.startswith("\ufeff名字,QQ,死线") and "Flame,10002,2026-11-30,导入" in csv_text
+    rec = bot.ledger.records()[0]
+    client.post(f"/ledger/{rec['id']}/deadline", data={"deadline": "2026-12-01"})
+    client.post("/members/10001/rename", data={"name": "巧克力酱"})
+    client.post(f"/ledger/{bot.ledger.records()[1]['id']}/delete")  # Flame 11/30
+    assert [p.entry for p in bot.ledger.people()] == ["Flame（11/3）", "巧克力酱（12/1）"]

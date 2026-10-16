@@ -52,7 +52,29 @@
   .tag { font-size: 12px; color: var(--accent); margin-left: 6px; }
   label.field { display: block; font-weight: 600; margin-bottom: 2px; }
   .error { color: var(--err); font-size: 14px; margin-top: 4px; }
-  @media (max-width: 560px) { .brand { display: none; } main { padding: 12px 16px; } }
+  a.btn { display: inline-block; text-decoration: none; color: var(--fg); border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 6px 14px; }
+  button.danger { color: var(--err); }
+  .muted { color: var(--muted); }
+  input[type=date] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  table.ledger { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  table.ledger th { text-align: left; font-size: 13px; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  table.ledger td { padding: 6px 10px; vertical-align: middle; }
+  table.ledger tr.first td { border-top: 1px solid var(--line); }
+  table.ledger tr.overdue td:not(.who) { color: var(--err); }
+  table.ledger tr.overdue input[type=date] { border-color: var(--err); color: var(--err); }
+  .who .rename { display: flex; gap: 4px; align-items: center; }
+  .who input { max-width: 140px; padding: 4px 8px; }
+  .who .qq { font-size: 12px; color: var(--muted); padding-left: 2px; }
+  .nowrap { flex-wrap: nowrap; }
+  @media (max-width: 560px) {
+    .brand { display: none; } main { padding: 12px 16px; }
+    table.ledger thead { display: none; }
+    table.ledger, table.ledger tbody, table.ledger tr, table.ledger td { display: block; width: 100%; }
+    table.ledger td { padding: 4px 12px; }
+    table.ledger td[rowspan] { padding-top: 10px; }
+    table.ledger tr:not(.first) td:first-child { padding-top: 8px; }
+    table.ledger tr td:last-child { padding-bottom: 10px; }
+  }
 </style>
 </head>
 <body>
@@ -61,6 +83,7 @@
   <span class="brand">骰娘后台</span>
   <nav>
     <a href="/texts" class="{{ 'on' if path.startswith('/texts') }}">文案</a>
+    <a href="/ledger" class="{{ 'on' if path.startswith('/ledger') }}">团账本</a>
     <a href="/settings" class="{{ 'on' if path.startswith('/settings') }}">配置</a>
   </nav>
   <span class="spacer"></span>

@@ -45,6 +45,19 @@ MIGRATIONS = [
     );
     CREATE INDEX ledger_active ON ledger (qq) WHERE removed_at IS NULL;
     """,
+    # 3: 人物卡
+    """
+    CREATE TABLE cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        qq INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,               -- 相对 data/cards/ 的路径；删除后在 _deleted/ 下
+        created_at INTEGER NOT NULL,
+        deleted_at INTEGER,
+        deleted_by TEXT
+    );
+    CREATE INDEX cards_owner ON cards (qq, name);
+    """,
 ]
 
 

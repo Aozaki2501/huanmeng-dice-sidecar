@@ -2,11 +2,11 @@
 import asyncio
 import csv
 import io
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -17,6 +17,7 @@ from .bot import Bot
 from .config import Config, session_secret, verify_password
 
 pages = Jinja2Templates(directory=Path(__file__).parent / "pages")
+pages.env.filters["datetime"] = lambda ts: datetime.fromtimestamp(ts, ledger.BEIJING).strftime("%Y-%m-%d %H:%M")
 
 
 def flash(request: Request, text: str, kind: str = "ok") -> None:
@@ -264,6 +265,33 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
         flash(request, f"已导入 {len(items)} 人、{n} 条记录")
         refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
+
+    # ---------- 人物卡 ----------
+    @app.get("/cards")
+    async def cards_page(request: Request):
+        people: dict[int, dict] = {}
+        for c in bot.cards.all():
+            people.setdefault(c["qq"], {"qq": c["qq"], "name": c["member"] or "", "cards": []})["cards"].append(c)
+        return render(request, "cards.html", people=list(people.values()))
+
+    @app.get("/cards/{card_id}/image")
+    async def card_image(card_id: int):
+        card = bot.cards.get(card_id)
+        if card is None or not bot.cards.file(card).is_file():
+            return Response(status_code=404)
+        return FileResponse(bot.cards.file(card))
+
+    @app.post("/cards/{card_id}/delete")
+    async def card_delete(request: Request, card_id: int):
+        bot.cards.delete_id(card_id, "web")
+        flash(request, "已删除这张卡，可以随时恢复")
+        return RedirectResponse(f"/cards#card-{card_id}", status_code=303)
+
+    @app.post("/cards/{card_id}/restore")
+    async def card_restore(request: Request, card_id: int):
+        bot.cards.restore_id(card_id, "web")
+        flash(request, "已恢复这张卡")
+        return RedirectResponse(f"/cards#card-{card_id}", status_code=303)
 
     return app
 

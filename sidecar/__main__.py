@@ -45,7 +45,7 @@ async def serve(config_path: Path) -> None:
     cfg = load_config(config_path)
     setup_logging(cfg.data_dir / "logs")
     conn = db.connect(cfg.db_path)
-    bot = Bot(conn, cfg.onebot_url, cfg.onebot_token)
+    bot = Bot(conn, cfg.onebot_url, cfg.onebot_token, cfg.data_dir)
     app = create_app(cfg, bot)
     server = uvicorn.Server(uvicorn.Config(app, log_config=None, access_log=False))
     logging.getLogger("sidecar").info("后台地址：%s", "、".join(f"http://{h}:{cfg.web_port}" for h in cfg.web_hosts))

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}人物卡 · 骰娘后台{% endblock %}
+{% block content %}
+<h1>人物卡</h1>
+<p class="desc">群友私聊骰娘 <span class="chip">.存卡 卡名</span> 存下的截图。同名卡的旧版本也保留着；删除的卡显示为半透明，可以恢复。点图片看原图。</p>
+{% for p in people %}
+<div class="card">
+  <h3>{{ p.name or "（不在团账本里）" }} <span class="muted" style="font-size: 13px; font-weight: normal;">QQ {{ p.qq }}</span></h3>
+  <div class="cards">
+    {% for c in p.cards %}
+    <figure id="card-{{ c.id }}" class="{{ 'deleted' if c.deleted_at }}">
+      <a href="/cards/{{ c.id }}/image" target="_blank"><img src="/cards/{{ c.id }}/image" alt="{{ c.name }}" loading="lazy"></a>
+      <figcaption>
+        {{ c.name }}<br><span class="muted">{{ c.created_at|datetime }}{{ "（已删除）" if c.deleted_at }}</span>
+        <form method="post" action="/cards/{{ c.id }}/{{ 'restore' if c.deleted_at else 'delete' }}">
+          <button class="link {{ '' if c.deleted_at else 'danger' }}">{{ "恢复" if c.deleted_at else "删除" }}</button>
+        </form>
+      </figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<p class="muted">还没有人存过人物卡。</p>
+{% endfor %}
+{% endblock %}

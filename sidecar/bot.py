@@ -1,11 +1,18 @@
 """消息处理：把 OneBot 事件分给各功能。海豹也会收到同样的消息，这里只响应自己的指令。"""
 import asyncio
+import base64
 import html
 import logging
 import re
 import sqlite3
+import time
+import urllib.request
+from pathlib import Path
 
 from . import ledger as ledger_mod
+from . import templates as tpl
+from .cards import Cards
+from .db import log_op
 from .ledger import Ledger, md
 from .onebot import ActionError, OneBot
 from .repeat import RepeatTracker
@@ -21,6 +28,9 @@ _COMMAND_LIKE = re.compile(r"^[.。!/]\s*[A-Za-z一-鿿]")
 CARD_COMMANDS = ("存卡", "取卡", "删卡")
 RR_COMMANDS = ("轮盘", "开枪")  # 不用 .rr：海豹会把它当成 .r 掷骰
 LEDGER_COMMANDS = ("团", "jt")
+CARD_WAIT_SECONDS = 180  # `.存卡 <卡名>` 之后多久内发的图片算数
+JOIN_CHECK_DELAY = 5  # 骰娘进新群后等几秒再查成员，让成员列表先同步
+_QQ = re.compile(r"[1-9]\d{4,11}")
 
 
 def plain_text(message) -> str | None:
@@ -52,14 +62,31 @@ def parse_command(text: str, names: tuple[str, ...]) -> tuple[str, str] | None:
     return None
 
 
+def split_message(message) -> tuple[str, list[dict]]:
+    """拆出文字和图片消息段。"""
+    if isinstance(message, str):
+        return message.strip(), []
+    text = "".join(s["data"].get("text", "") for s in message if s.get("type") == "text")
+    return text.strip(), [s for s in message if s.get("type") == "image"]
+
+
+def http_get(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=20) as r:
+        return r.read()
+
+
 def sender_name(event: dict) -> str:
     sender = event.get("sender") or {}
     return sender.get("card") or sender.get("nickname") or str(event.get("user_id"))
 
 
 class Bot:
-    def __init__(self, conn: sqlite3.Connection, onebot_url: str, onebot_token: str):
+    def __init__(self, conn: sqlite3.Connection, onebot_url: str, onebot_token: str, data_dir: Path = Path("data")):
         self.conn = conn
+        self.cards = Cards(conn, data_dir / "cards")
+        self.waiting_cards: dict[int, tuple[str, float]] = {}  # QQ -> (卡名, 截止时间)
+        self.http_get = http_get
+        self.join_check_delay = JOIN_CHECK_DELAY
         self.settings = Settings(conn)
         self.templates = Templates(conn)
         self.ledger = Ledger(conn)
@@ -78,6 +105,8 @@ class Bot:
                 await self.on_group_message(event)
             elif event.get("message_type") == "private":
                 await self.on_private_message(event)
+        elif event.get("post_type") == "notice" and event.get("notice_type") == "group_increase":
+            await self.on_group_increase(int(event["group_id"]), int(event["user_id"]))
 
     async def on_group_message(self, event: dict) -> None:
         group_id, user_id = int(event["group_id"]), int(event["user_id"])
@@ -100,12 +129,140 @@ class Bot:
             await self.on_ledger(event, ("group", group_id), cmd[1])
 
     async def on_private_message(self, event: dict) -> None:
-        text = plain_text(event.get("message", []))
-        if text is None:
+        uid = int(event["user_id"])
+        text, images = split_message(event.get("message", []))
+        if cmd := parse_command(text, CARD_COMMANDS):
+            await self.on_card(uid, *cmd, images)
+        elif cmd := parse_command(text, LEDGER_COMMANDS):
+            await self.on_ledger(event, ("private", uid), cmd[1])
+        elif images and uid in self.waiting_cards:
+            name, until = self.waiting_cards.pop(uid)
+            if time.monotonic() <= until:
+                await self.save_card(uid, name, images[0])
+
+    # ---------- 入群欢迎与拉群校验 ----------
+    async def on_group_increase(self, group_id: int, user_id: int) -> None:
+        if user_id == self.onebot.self_id:
+            await self.check_new_group(group_id)
             return
-        if cmd := parse_command(text, LEDGER_COMMANDS):
-            await self.on_ledger(event, ("private", int(event["user_id"])), cmd[1])
-        # 人物卡存取在第 6 阶段实现
+        if self.settings.is_ignored(user_id):
+            return
+        # 只在大群欢迎；其他群在后台单独设置了欢迎语才发
+        if group_id != self.settings.get("main_group") and not self.templates.is_customized("welcome.default", str(group_id)):
+            return
+        await self.send(("group", group_id), "welcome.default", at=tpl.at(user_id),
+                        nickname=await self.member_name(group_id, user_id), group_name=await self.group_name(group_id))
+
+    async def group_name(self, group_id: int) -> str:
+        try:
+            return (await self.onebot.call("get_group_info", group_id=group_id) or {}).get("group_name") or str(group_id)
+        except ActionError:
+            return str(group_id)
+
+    async def check_new_group(self, group_id: int) -> None:
+        """骰娘被拉进新群：群里没有大群成员、又不在白名单，就发拒绝语后主动退群。"""
+        main = self.settings.get("main_group")
+        if not main or group_id == main:
+            return
+        name = await self.group_name(group_id)
+        if group_id in self.settings.get("invite_whitelist"):
+            log.info("进群 %s（%s）：在白名单中，放行", group_id, name)
+            await self.send(("group", group_id), "invite.hello", group_name=name)
+            return
+        await asyncio.sleep(self.join_check_delay)
+        try:
+            here = await self.onebot.call("get_group_member_list", group_id=group_id, no_cache=True) or []
+            big = await self.onebot.call("get_group_member_list", group_id=main, no_cache=True) or []
+        except ActionError as e:
+            log.error("进群 %s 校验失败，先留在群里：%s", group_id, e)
+            return
+        skip = {self.onebot.self_id, *self.settings.get("ignore_qq")}
+        common = ({int(m["user_id"]) for m in here} & {int(m["user_id"]) for m in big}) - skip
+        info = {"group_id": group_id, "group_name": name, "common": len(common)}
+        if common:
+            log.info("进群 %s（%s）：有 %d 位大群成员，留下", group_id, name, len(common))
+            log_op(self.conn, "bot", "group.join", None, info)
+            await self.send(("group", group_id), "invite.hello", group_name=name)
+            return
+        log.info("进群 %s（%s）：没有大群成员，退群", group_id, name)
+        log_op(self.conn, "bot", "group.leave", None, info)
+        await self.send(("group", group_id), "invite.reject", group_name=name)
+        try:
+            await self.onebot.call("set_group_leave", group_id=group_id)
+        except ActionError as e:
+            log.error("退出群 %s 失败：%s", group_id, e)
+
+    # ---------- 人物卡（私聊） ----------
+    async def on_card(self, uid: int, cmd: str, args: str, images: list[dict]) -> None:
+        target = ("private", uid)
+        if cmd == "存卡":
+            if not args:
+                await self.send(target, "card.save_usage")
+            elif images:
+                await self.save_card(uid, args, images[0])
+            else:
+                self.waiting_cards[uid] = (args, time.monotonic() + CARD_WAIT_SECONDS)
+                await self.send(target, "card.wait_image", name=args)
+        elif cmd == "取卡":
+            parts = args.split(maxsplit=1)
+            owner = uid
+            if parts and _QQ.fullmatch(parts[0]):
+                owner, parts = int(parts[0]), parts[1:]
+                if owner != uid and not await self.is_main_group_admin(uid):
+                    await self.send(target, "card.denied")
+                    return
+            who = "你" if owner == uid else str(owner)
+            if not parts:
+                cards = self.cards.current(owner)
+                if cards:
+                    lines = "\n".join(f"{i}. {c['name']}" for i, c in enumerate(cards, 1))
+                    await self.send(target, "card.list", owner=who, cards=lines)
+                else:
+                    await self.send(target, "card.list_none", owner=who)
+                return
+            card = self.cards.find(owner, parts[0])
+            if card is None:
+                await self.send(target, "card.not_found", query=parts[0])
+                return
+            data = base64.b64encode(self.cards.file(card).read_bytes()).decode()
+            await self.deliver(target, [{"type": "image", "data": {"file": f"base64://{data}"}}], "人物卡")
+        elif cmd == "删卡":
+            if not args:
+                await self.send(target, "card.delete_usage")
+                return
+            card = self.cards.find(uid, args)
+            if card is None:
+                await self.send(target, "card.not_found", query=args)
+                return
+            self.cards.delete(uid, card["name"], str(uid))
+            await self.send(target, "card.deleted", name=card["name"])
+
+    async def save_card(self, uid: int, name: str, image: dict) -> None:
+        self.waiting_cards.pop(uid, None)
+        try:
+            data = await self.download_image(image)
+            self.cards.save(uid, name, data)
+        except Exception as e:
+            log.error("保存 %s 的人物卡「%s」失败：%s", uid, name, e)
+            await self.send(("private", uid), "card.save_failed", name=name)
+            return
+        log.info("存卡：%s「%s」", uid, name)
+        await self.send(("private", uid), "card.saved", name=name)
+
+    async def download_image(self, image: dict) -> bytes:
+        """QQ 图片链接会过期，收到就下载。直接下载失败时，向协议端要一个新链接再试。"""
+        data = image.get("data") or {}
+        if data.get("url"):
+            try:
+                return await asyncio.to_thread(self.http_get, data["url"])
+            except Exception as e:
+                log.warning("直接下载图片失败，改用 get_image：%s", e)
+        info = await self.onebot.call("get_image", file=data.get("file") or data.get("file_id") or "") or {}
+        if info.get("file") and Path(info["file"]).is_file():
+            return Path(info["file"]).read_bytes()
+        if info.get("url"):
+            return await asyncio.to_thread(self.http_get, info["url"])
+        raise ActionError("get_image 没有返回可用的图片")
 
     # ---------- 发送 ----------
     async def send(self, target: tuple[str, int], key: str, **values) -> None:

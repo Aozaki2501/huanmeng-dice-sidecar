@@ -38,6 +38,7 @@ def test_literal_braces_allowed():
 
 def test_render_at_segment(conn):
     t = tpl.Templates(conn)
+    t.save("welcome.default", ["欢迎 {at} 来到{group_name}。"], "test")
     segs = t.render("welcome.default", "", at=tpl.at(123), nickname="n", group_name="G")
     assert segs == [
         {"type": "text", "data": {"text": "欢迎 "}},

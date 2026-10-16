@@ -148,10 +148,12 @@ def test_roulette_timeout_and_off(monkeypatch):
 
 # ---------- 接入 bot：记团、公告、名单格式 ----------
 class FakeBot(Bot):
-    def __init__(self, conn):
-        super().__init__(conn, "ws://x", "")
+    def __init__(self, conn, data_dir):
+        super().__init__(conn, "ws://x", "", data_dir)
         self.onebot.self_id = BOT_QQ
         self.sent = []
+        self.calls = []  # 其他接口调用 (action, params)
+        self.replies = {}  # action -> 返回值
         self.roles = {}
         self.notices = []
         self.notice_ids = itertools.count(1)
@@ -172,11 +174,14 @@ class FakeBot(Bot):
             elif action == "get_group_member_info":
                 return {"role": self.roles.get((params["group_id"], params["user_id"]), "member"),
                         "card": f"名片{params['user_id']}"}
+            else:
+                self.calls.append((action, params))
+                return self.replies.get(action)
         self.onebot.call = call
 
 
 def _text(segs):
-    return "".join(s["data"].get("text", "") for s in segs)
+    return "".join(s["data"].get("text", "") if s["type"] == "text" else f"[{s['type']}]" for s in segs)
 
 
 def msg(group, user, text, role="member"):
@@ -187,7 +192,7 @@ def msg(group, user, text, role="member"):
 
 @pytest.fixture
 def fb(tmp_path):
-    bot = FakeBot(db.connect(tmp_path / "t.db"))
+    bot = FakeBot(db.connect(tmp_path / "t.db"), tmp_path)
     bot.settings.update({"main_group": 100, "repeat_groups": [100, 200]}, "test")
     return bot
 

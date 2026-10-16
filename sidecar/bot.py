@@ -208,7 +208,7 @@ class Bot:
             owner = uid
             if parts and _QQ.fullmatch(parts[0]):
                 owner, parts = int(parts[0]), parts[1:]
-                if owner != uid and not await self.is_main_group_admin(uid):
+                if owner != uid and not await self.is_main_group_member(uid):  # KP 取 PL 的卡
                     await self.send(target, "card.denied")
                     return
             who = "你" if owner == uid else str(owner)
@@ -304,6 +304,17 @@ class Bot:
         except ActionError:
             return False  # 不在大群里
         return (info or {}).get("role") in ("owner", "admin")
+
+    async def is_main_group_member(self, user_id: int) -> bool:
+        main = self.settings.get("main_group")
+        if not main:
+            return False
+        try:
+            info = await self.onebot.call("get_group_member_info", group_id=main, user_id=user_id, no_cache=True)
+        except ActionError:
+            return False
+        # SnowLuma 查群外的人不报错，而是返回入群时间为 0 的空资料
+        return bool((info or {}).get("join_time"))
 
     # ---------- 复读链 ----------
     async def settle_repeat(self, group_id: int, s) -> None:

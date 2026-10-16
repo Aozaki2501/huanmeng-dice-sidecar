@@ -155,6 +155,7 @@ class FakeBot(Bot):
         self.calls = []  # 其他接口调用 (action, params)
         self.replies = {}  # action -> 返回值
         self.roles = {}
+        self.outsiders = set()  # (群号, QQ)：不在群里的人
         self.notices = []
         self.notice_ids = itertools.count(1)
 
@@ -172,8 +173,10 @@ class FakeBot(Bot):
             elif action == "_del_group_notice":
                 self.notices = [n for n in self.notices if n["notice_id"] != params["notice_id"]]
             elif action == "get_group_member_info":
+                if (params["group_id"], params["user_id"]) in self.outsiders:  # 像 SnowLuma 一样返回空资料
+                    return {"role": "member", "card": "", "join_time": 0}
                 return {"role": self.roles.get((params["group_id"], params["user_id"]), "member"),
-                        "card": f"名片{params['user_id']}"}
+                        "card": f"名片{params['user_id']}", "join_time": 1700000000}
             else:
                 self.calls.append((action, params))
                 return self.replies.get(action)

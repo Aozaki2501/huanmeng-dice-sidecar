@@ -137,12 +137,12 @@ def test_save_failure_reported(fb):
     assert fb.sent[-1][2] == "人物卡「调查员A」的图片没能保存，请重新发送一次。"
 
 
-def test_get_others_card_needs_admin(fb):
+def test_get_others_card_needs_main_group_member(fb):
     feed(fb, pm(P[1], ".存卡 调查员A", image=True))
-    feed(fb, pm(P[2], f".取卡 {P[1]}"))
-    assert fb.sent[-1][2] == "只有大群管理员和记团管理员可以取别人的人物卡。"
-    fb.roles[(100, P[2])] = "admin"
-    feed(fb, pm(P[2], f".取卡 {P[1]}"))
+    fb.outsiders.add((100, P[3]))
+    feed(fb, pm(P[3], f".取卡 {P[1]}"))
+    assert fb.sent[-1][2] == "只有大群成员可以取别人的人物卡。"
+    feed(fb, pm(P[2], f".取卡 {P[1]}"))  # 普通大群成员（比如 KP）可以取
     assert fb.sent[-1][2].startswith(f"{P[1]}的人物卡：\n1. 调查员A")
     feed(fb, pm(P[2], f".取卡 {P[1]} 1"))
     assert fb.sent[-1][2] == "[image]"

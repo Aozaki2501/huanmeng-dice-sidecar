@@ -22,7 +22,7 @@ SETTINGS = [
     SettingDef("main_group", "大群群号", "记团公告发到这个群，拉群校验和消团权限也以它为准。", "qq", None),
     SettingDef("repeat_groups", "复读检测群", "在这些群里检测复读链。留空表示只检测大群。", "qq_list", []),
     SettingDef("ignore_qq", "忽略 QQ", "各类机器人的 QQ 号。它们的消息完全忽略，拉群校验时也不算作大群成员。", "qq_list", []),
-    SettingDef("ledger_admins", "记团管理员 QQ", "除大群群主和管理员外，额外允许消团和取别人人物卡的人。", "qq_list", []),
+    SettingDef("ledger_admins", "记团管理员 QQ", "除大群群主和管理员外，额外允许消团的人。", "qq_list", []),
     SettingDef("invite_whitelist", "拉群白名单", "没有大群成员也允许骰娘留下的群。", "qq_list", []),
     SettingDef("deadline_months", "死线月数", "记团后多少个月内须开团。", "int", 2, 1, 24),
     SettingDef("rr_timeout_minutes", "轮盘超时分钟数", "开局后多久无人操作就作废。", "int", 15, 1, 1440),

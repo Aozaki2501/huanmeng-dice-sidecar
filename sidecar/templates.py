@@ -219,7 +219,7 @@ CATALOG = [
     TemplateDef("card.not_found", "人物卡", "找不到卡片", "卡名或编号对不上时发送。", {"query": "输入的卡名或编号"},
                 ["没有找到人物卡「{query}」，发送 .取卡 查看列表。"], samples={"query": "调查员C"}),
     TemplateDef("card.denied", "人物卡", "无权取卡", "取别人的卡但没有权限时发送。", {},
-                ["只有大群管理员和记团管理员可以取别人的人物卡。"]),
+                ["只有大群成员可以取别人的人物卡。"]),
     TemplateDef("card.deleted", "人物卡", "删卡成功", "`.删卡` 成功后发送。", {"name": "卡名"},
                 ["已删除人物卡「{name}」。"]),
     TemplateDef("card.delete_usage", "人物卡", "删卡用法", "`.删卡` 没写卡名时发送。", {},

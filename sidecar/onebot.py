@@ -27,6 +27,10 @@ class OneBot:
         self.self_id: int | None = None
         self.connected_at: float | None = None
         self.last_error: str = ""
+        # 协议端心跳：QQ 掉线时 status.online 变成 false，协议端卡死时心跳会停
+        self.last_heartbeat: float | None = None
+        self.heartbeat_interval: float = 30
+        self.online: bool | None = None
         self._pending: dict[str, asyncio.Future] = {}
         self._echo = itertools.count(1)
 
@@ -55,6 +59,7 @@ class OneBot:
             finally:
                 self.ws = None
                 self.connected_at = None
+                self.last_heartbeat = self.online = None
                 for fut in self._pending.values():
                     if not fut.done():
                         fut.set_exception(ActionError("连接已断开"))
@@ -78,12 +83,32 @@ class OneBot:
         if "post_type" in data:
             if data.get("self_id"):
                 self.self_id = int(data["self_id"])
+            if data["post_type"] == "meta_event":
+                status = data.get("status") or {}
+                if "online" in status:
+                    self.online = bool(status["online"]) and status.get("good", True) is not False
+                if data.get("meta_event_type") == "heartbeat":
+                    self.last_heartbeat = time.time()
+                    if data.get("interval"):
+                        self.heartbeat_interval = data["interval"] / 1000
+                return
             task = asyncio.create_task(self.on_event(data))
             task.add_done_callback(_log_task_error)
         elif (echo := data.get("echo")) in self._pending:
             fut = self._pending.pop(echo)
             if not fut.done():
                 fut.set_result(data)
+
+    def problem(self, now: float | None = None) -> str | None:
+        """现在有什么问题；正常时返回 None。"""
+        now = now or time.time()
+        if self.ws is None:
+            return f"连不上协议端（{self.url}）。{self.last_error}".strip()
+        if self.online is False:
+            return "QQ 已掉线，可能需要在 SnowLuma 里重新扫码登录。"
+        if self.last_heartbeat and now - self.last_heartbeat > 3 * self.heartbeat_interval:
+            return f"协议端已经 {int(now - self.last_heartbeat)} 秒没有心跳，可能卡住了。"
+        return None
 
     async def call(self, action: str, timeout: float = 30, **params):
         if self.ws is None:

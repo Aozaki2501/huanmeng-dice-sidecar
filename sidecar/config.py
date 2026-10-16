@@ -17,6 +17,10 @@ class Config:
     web_port: int
     admin_password_hash: str
     data_dir: Path
+    backup_dir: Path | None = None
+    sealdice_backups: Path | None = None
+    backup_keep: int = 8
+    desktop_alert: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -26,16 +30,24 @@ class Config:
 def load_config(path: Path) -> Config:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     onebot, web, paths = raw.get("onebot", {}), raw.get("web", {}), raw.get("paths", {})
-    data_dir = Path(paths.get("data_dir", "data"))
-    if not data_dir.is_absolute():
-        data_dir = path.parent / data_dir
+    backup, alert = raw.get("backup", {}), raw.get("alert", {})
+
+    def resolve(value: str) -> Path | None:
+        if not value:
+            return None
+        p = Path(value)
+        return p if p.is_absolute() else path.parent / p
     return Config(
         onebot_url=onebot["url"],
         onebot_token=onebot.get("token", ""),
         web_hosts=list(web.get("hosts", ["127.0.0.1"])),
         web_port=int(web.get("port", 3220)),
         admin_password_hash=web.get("admin_password_hash", ""),
-        data_dir=data_dir,
+        data_dir=resolve(paths.get("data_dir", "data")),
+        backup_dir=resolve(backup.get("dir", "")),
+        sealdice_backups=resolve(backup.get("sealdice_backups", "")),
+        backup_keep=int(backup.get("keep", 8)),
+        desktop_alert=bool(alert.get("desktop", True)),
     )
 
 

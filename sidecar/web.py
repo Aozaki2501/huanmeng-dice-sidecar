@@ -32,6 +32,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
 
 def create_app(cfg: Config, bot: Bot) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    pages.env.globals["monitor"] = bot.monitor  # 每页顶部显示掉线警告
 
     @app.middleware("http")
     async def require_login(request: Request, call_next):

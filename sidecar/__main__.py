@@ -1,6 +1,8 @@
 """入口。
     uv run python -m sidecar               按 config.toml 启动
     uv run python -m sidecar hash-password 生成管理员密码哈希，填进 config.toml
+    uv run python -m sidecar backup        立即备份一次（需要在 config.toml 里设置备份目录）
+    uv run python -m sidecar restore <备份目录里的 db/sidecar-日期.db>   用备份恢复，先停掉服务
 """
 import argparse
 import asyncio
@@ -13,7 +15,7 @@ from pathlib import Path
 
 import uvicorn
 
-from . import db
+from . import backup, db
 from .bot import Bot
 from .config import hash_password, load_config
 from .web import create_app
@@ -49,16 +51,28 @@ async def serve(config_path: Path) -> None:
     app = create_app(cfg, bot)
     server = uvicorn.Server(uvicorn.Config(app, log_config=None, access_log=False))
     logging.getLogger("sidecar").info("后台地址：%s", "、".join(f"http://{h}:{cfg.web_port}" for h in cfg.web_hosts))
-    onebot_task = asyncio.create_task(bot.onebot.run())
+    if not cfg.desktop_alert:
+        bot.monitor.notify = lambda title, text: None
+    tasks = [asyncio.create_task(bot.onebot.run()), asyncio.create_task(bot.monitor.run())]
+    if cfg.backup_dir:
+        tasks.append(asyncio.create_task(backup.weekly(cfg.data_dir, backup_config(cfg))))
+    else:
+        logging.getLogger("sidecar").warning("config.toml 没有设置备份目录，不会自动备份")
     try:
         await server.serve(sockets=bind(cfg.web_hosts, cfg.web_port))
     finally:
-        onebot_task.cancel()
+        for t in tasks:
+            t.cancel()
+
+
+def backup_config(cfg) -> backup.BackupConfig:
+    return backup.BackupConfig(cfg.backup_dir, cfg.sealdice_backups, cfg.backup_keep)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="sidecar")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "hash-password"])
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "hash-password", "backup", "restore"])
+    parser.add_argument("file", nargs="?", type=Path, help="restore 时要恢复的备份数据库文件")
     parser.add_argument("--config", default="config.toml", type=Path)
     args = parser.parse_args()
     if args.command == "hash-password":
@@ -66,6 +80,20 @@ def main() -> None:
         if pw != getpass.getpass("再输一次：") or not pw:
             sys.exit("两次输入不一致或为空")
         print(hash_password(pw))
+        return
+    if args.command in ("backup", "restore"):
+        cfg = load_config(args.config)
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        if args.command == "backup":
+            if not cfg.backup_dir:
+                sys.exit("config.toml 的 [backup] dir 还没填")
+            print(f"已备份到 {backup.run_backup(cfg.data_dir, backup_config(cfg))}")
+        else:
+            if not args.file or not args.file.is_file():
+                sys.exit("用法：uv run python -m sidecar restore <备份目录里的 db/sidecar-日期.db>")
+            if input("恢复前请先停掉旁路服务。确认恢复？输入 yes：").strip() != "yes":
+                sys.exit("已取消")
+            backup.restore(args.file, cfg.data_dir)
         return
     try:
         asyncio.run(serve(args.config))

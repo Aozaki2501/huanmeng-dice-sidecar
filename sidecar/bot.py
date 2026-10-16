@@ -14,6 +14,7 @@ from . import templates as tpl
 from .cards import Cards
 from .db import log_op
 from .ledger import Ledger, md
+from .monitor import Monitor
 from .onebot import ActionError, OneBot
 from .repeat import RepeatTracker
 from .roulette import Outcome, Roulette
@@ -93,6 +94,7 @@ class Bot:
         self.repeat = RepeatTracker()
         self.roulette = Roulette()
         self.onebot = OneBot(onebot_url, onebot_token, self.handle_event)
+        self.monitor = Monitor(self.onebot)
         self._notice_lock = asyncio.Lock()
 
     # ---------- 分发 ----------

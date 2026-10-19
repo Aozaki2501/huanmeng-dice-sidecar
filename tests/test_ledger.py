@@ -314,7 +314,7 @@ def test_ledger_change_replaces_group_notice(fb):
     feed(fb, msg(200, P[6], ".团 加 10001 巧克力 7/20"))
     ids = [n["notice_id"] for n in fb.notices]
     assert ids[:2] == ["rules", "human"] and len(ids) == 3
-    assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20）")
+    assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20） 10001")
     feed(fb, msg(100, P[6], ".团 消 巧克力"))
     assert len(fb.notices) == 3 and fb.notices[-1]["message"]["text"].endswith("&#10;暂无。")
 
@@ -345,3 +345,37 @@ def test_at_and_reply_still_break_repeat_chain(fb):
     e["message"] = [{"type": "at", "data": {"qq": str(P[1])}}, {"type": "text", "data": {"text": "草"}}]
     feed(fb, *(msg(200, P[i], "草") for i in range(1, 4)), e, msg(200, P[5], "草"), msg(200, P[9], "停"))
     assert fb.ledger.person(P[2]) is None
+
+
+# ---------- 圈名 ----------
+def test_self_bind_name_before_recorded(fb):
+    """先绑了圈名，以后被记团就用圈名，而不是当时的群名片。"""
+    feed(fb, msg(200, P[2], ".团 名 Flame"))
+    assert fb.sent[-1][2] == "名单上的「10002」已改为「Flame」。"
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 5)), msg(200, P[9], "停"))
+    assert fb.ledger.person(P[2]).name == "Flame"
+    assert "Flame（" in fb.sent[-1][2]
+
+
+def test_admin_renames_other_and_notice_updates(fb):
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 5)), msg(200, P[9], "停"))  # 记 P2，名字是群名片 P2
+    feed(fb, msg(200, P[3], f".团 名 {P[2]} Flame"))
+    assert fb.sent[-1][2].startswith("只有大群管理员可以改别人的名字")
+    fb.roles[(100, P[6])] = "admin"
+    e = msg(200, P[6], "")
+    e["message"] = [{"type": "text", "data": {"text": ".团 名 "}}, {"type": "at", "data": {"qq": str(P[2])}},
+                    {"type": "text", "data": {"text": " Flame 酱"}}]
+    feed(fb, e)
+    assert fb.sent[-1][2] == "名单上的「名片10002」已改为「Flame 酱」。"
+    assert fb.notices[-1]["message"]["text"].endswith("Flame 酱（" + fb.ledger.person(P[2]).entry.split("（")[1] + f" {P[2]}")
+    feed(fb, msg(200, P[2], ".团 我"))
+    assert fb.sent[-1][2].startswith("Flame 酱（")
+
+
+def test_rename_usage(fb):
+    feed(fb, msg(200, P[2], ".团 名"))
+    assert fb.sent[-1][2].startswith("用法：.团 名")
+    feed(fb, msg(200, P[2], ".团 名 " + "长" * 21))
+    assert fb.sent[-1][2].startswith("用法：.团 名")
+    feed(fb, msg(200, P[2], ".团 名 23"))  # 短数字是名字，不当 QQ 号
+    assert fb.ledger.member_name(P[2]) == "23"

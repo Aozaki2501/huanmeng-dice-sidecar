@@ -146,13 +146,19 @@ class Ledger:
                {"record": record_id, "deadline": deadline.isoformat()})
         self.conn.execute("COMMIT")
 
+    def member_name(self, qq: int) -> str | None:
+        row = self.conn.execute("SELECT name FROM members WHERE qq = ?", (qq,)).fetchone()
+        return row["name"] if row else None
+
     def rename(self, qq: int, name: str, operator: str) -> None:
-        old = self.conn.execute("SELECT name FROM members WHERE qq = ?", (qq,)).fetchone()
-        if old is None or old["name"] == name:
+        """改名单上显示的名字（圈名）。还没被记过团的人也可以先登记，以后记团就用这个名字。"""
+        old = self.member_name(qq)
+        if old == name:
             return
         self.conn.execute("BEGIN")
-        self.conn.execute("UPDATE members SET name = ? WHERE qq = ?", (name, qq))
-        log_op(self.conn, operator, "member.rename", {"qq": qq, "name": old["name"]}, {"qq": qq, "name": name})
+        self.conn.execute("INSERT INTO members (qq, name) VALUES (?, ?) ON CONFLICT(qq) DO UPDATE SET name = excluded.name",
+                          (qq, name))
+        log_op(self.conn, operator, "member.rename", None if old is None else {"qq": qq, "name": old}, {"qq": qq, "name": name})
         self.conn.execute("COMMIT")
 
     def import_people(self, items: list[tuple[int, str, list[date]]], operator: str) -> int:

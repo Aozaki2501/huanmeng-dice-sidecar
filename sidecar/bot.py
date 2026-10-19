@@ -396,7 +396,8 @@ class Bot:
             await self.send(("group", group_id), out.key, **out.values)
 
     # ---------- 团账本 ----------
-    def ledger_list_text(self) -> str:
+    def ledger_list_text(self, with_qq: bool = False) -> str:
+        """`.团` 的名单。群公告里每行后面加 QQ 号（with_qq），方便管理对上人。"""
         lines = [self.templates.render_text("ledger.title") or ""]
         rule = "————————————"
         lines.append(rule)
@@ -404,7 +405,7 @@ class Bot:
         if link:
             lines += ["全部名单：", link, rule]
         people = self.ledger.people()
-        lines += [p.entry for p in people] if people else [self.templates.render_text("ledger.empty") or ""]
+        lines += [f"{p.entry} {p.qq}" if with_qq else p.entry for p in people] if people else [self.templates.render_text("ledger.empty") or ""]
         return "\n".join(line for line in lines if line)
 
     async def send_ledger_list(self, target) -> None:
@@ -422,7 +423,7 @@ class Bot:
                 notices = await self.onebot.call("_get_group_notice", group_id=main) or []
                 old = [n["notice_id"] for n in notices if n.get("sender_id") == self.onebot.self_id
                        and html.unescape((n.get("message") or {}).get("text", "")).split("\n")[0] in marks]
-                await self.onebot.call("_send_group_notice", group_id=main, content=self.ledger_list_text(),
+                await self.onebot.call("_send_group_notice", group_id=main, content=self.ledger_list_text(with_qq=True),
                                        is_show_edit_card=0, tip_window_type=1, confirm_required=0)
                 for notice_id in old:
                     await self.onebot.call("_del_group_notice", group_id=main, notice_id=notice_id)
@@ -458,6 +459,27 @@ class Bot:
                     await self.send(target, "ledger.removed", name=person.name, deadline=md(deadline), entry=person.entry)
                 else:
                     await self.send(target, "ledger.removed_all", name=person.name, deadline=md(deadline))
+                await self.refresh_notice()
+        elif sub in ("名", "改名", "name"):
+            rest = parts[1:]
+            if len(rest) >= 2 and _QQ.fullmatch(rest[0]):
+                qq, name = int(rest[0]), " ".join(rest[1:])
+                if qq != uid and not await self.is_main_group_admin(uid):
+                    await self.send(target, "ledger.rename_denied")
+                    return
+            elif rest:
+                qq, name = uid, " ".join(rest)
+            else:
+                await self.send(target, "ledger.rename_usage")
+                return
+            if len(name) > 20:
+                await self.send(target, "ledger.rename_usage")
+                return
+            old = self.ledger.member_name(qq) or str(qq)
+            self.ledger.rename(qq, name, str(uid))
+            await self.send(target, "ledger.renamed", old=old, name=name)
+            person = self.ledger.person(qq)
+            if person and person.deadlines:
                 await self.refresh_notice()
         elif sub in ("加", "add"):
             if not await self.is_main_group_admin(uid):

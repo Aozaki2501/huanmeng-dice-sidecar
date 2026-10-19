@@ -58,6 +58,16 @@ MIGRATIONS = [
     );
     CREATE INDEX cards_owner ON cards (qq, name);
     """,
+    # 4: 逾期名单（没还清团就退群的人）
+    """
+    CREATE TABLE overdue (
+        qq INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        deadlines TEXT NOT NULL DEFAULT '',  -- 照原表抄写的死线，如「2021 年 3/2，4/8」
+        note TEXT NOT NULL DEFAULT '',
+        added_at INTEGER NOT NULL
+    );
+    """,
 ]
 
 

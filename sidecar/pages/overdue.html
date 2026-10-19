@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}逾期名单 · 骰娘后台{% endblock %}
+{% block content %}
+<h1>逾期名单</h1>
+<p class="desc">没还清团就退群的人。名单上的人再进大群时，骰娘会在入群欢迎之后发一条提醒（文案页「逾期名单提醒」可改，留空则不提醒）。人回来还清了，就在这里移出名单。</p>
+{% if error %}<p class="error">{{ error }}，所以「是否在大群」一栏暂时空着。</p>{% endif %}
+
+<div class="card">
+  <h3>从表格粘贴导入</h3>
+  <p class="desc">在腾讯文档里选中「昵称、死线日期、QQ号、备注」几列（可以连同年份行和表头一起选），复制后粘贴到下面。年份行会加到下面各行的死线前面；QQ 号一栏不是数字的行会列出来，需要手动补。</p>
+  <form method="post" action="/overdue/import">
+    <textarea name="text" rows="6" placeholder="2021&#10;临江	(1/16)	156044747&#10;小笼包	(3/2，4/8)	461640437"></textarea>
+    <div class="row" style="margin-top: 8px;"><button class="primary">导入</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>手动添加</h3>
+  <form method="post" action="/overdue/add" class="row" style="margin-top: 8px;">
+    <input type="text" name="name" placeholder="昵称" style="max-width: 140px;" required>
+    <input type="text" name="qq" placeholder="QQ 号" inputmode="numeric" style="max-width: 150px;" required>
+    <input type="text" name="deadlines" placeholder="死线，如 2021 年 3/2，4/8" style="max-width: 220px;">
+    <input type="text" name="note" placeholder="备注" style="max-width: 180px;">
+    <button class="primary">添加</button>
+  </form>
+</div>
+
+<table class="ledger">
+  <thead><tr><th>昵称</th><th>死线</th><th>QQ 号</th><th>备注</th><th>是否在大群</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="first {{ 'overdue' if in_group is not none and r.qq in in_group }}">
+      <td>{{ r.name }}</td>
+      <td>{{ r.deadlines or '—' }}</td>
+      <td>{{ r.qq }}</td>
+      <td class="muted">{{ r.note }}</td>
+      <td>{% if in_group is none %}<span class="muted">—</span>{% elif r.qq in in_group %}在群里{% else %}<span class="muted">不在</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/overdue/{{ r.qq }}/delete" onsubmit="return confirm('把 {{ r.name }} 移出逾期名单？')">
+          <button class="link danger">移出</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">名单是空的。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="desc" style="margin-top: 8px;">共 {{ rows|length }} 人{% if in_group is not none %}，其中 {{ rows|selectattr('qq', 'in', in_group)|list|length }} 人现在在大群里（标红）{% endif %}。</p>
+{% endblock %}

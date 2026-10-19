@@ -15,6 +15,7 @@ from .cards import Cards
 from .db import log_op
 from .ledger import Ledger, md
 from .monitor import Monitor
+from .overdue import Overdue
 from .onebot import ActionError, OneBot
 from .repeat import RepeatTracker
 from .roulette import Outcome, Roulette
@@ -107,6 +108,7 @@ class Bot:
     def __init__(self, conn: sqlite3.Connection, onebot_url: str, onebot_token: str, data_dir: Path = Path("data")):
         self.conn = conn
         self.cards = Cards(conn, data_dir / "cards")
+        self.overdue = Overdue(conn)
         self.waiting_cards: dict[int, tuple[str, float]] = {}  # QQ -> (卡名, 截止时间)
         self.http_get = http_get
         self.join_check_delay = JOIN_CHECK_DELAY
@@ -172,11 +174,16 @@ class Bot:
             return
         if self.settings.is_ignored(user_id):
             return
+        main = self.settings.get("main_group")
         # 只在大群欢迎；其他群在后台单独设置了欢迎语才发
-        if group_id != self.settings.get("main_group") and not self.templates.is_customized("welcome.default", str(group_id)):
+        if group_id != main and not self.templates.is_customized("welcome.default", str(group_id)):
             return
         await self.send(("group", group_id), "welcome.default", at=tpl.at(user_id),
                         nickname=await self.member_name(group_id, user_id), group_name=await self.group_name(group_id))
+        if group_id == main and (row := self.overdue.get(user_id)):
+            log.info("逾期名单上的 %s（%s）进了大群", row["name"], user_id)
+            await self.send(("group", group_id), "overdue.joined", at=tpl.at(user_id), qq=user_id,
+                            name=row["name"], deadlines=row["deadlines"] or "—", note=row["note"])
 
     async def group_name(self, group_id: int) -> str:
         try:

@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import ledger
+from . import overdue as overdue_mod
 from . import settings as settings_mod
 from . import templates as tpl
 from .bot import Bot
@@ -266,6 +267,47 @@ def create_app(cfg: Config, bot: Bot) -> FastAPI:
         flash(request, f"已导入 {len(items)} 人、{n} 条记录")
         refresh_notice_later()
         return RedirectResponse("/ledger", status_code=303)
+
+    # ---------- 逾期名单 ----------
+    @app.get("/overdue")
+    async def overdue_page(request: Request):
+        in_group, error = None, ""
+        main = bot.settings.get("main_group")
+        if main:
+            try:
+                members = await bot.onebot.call("get_group_member_list", group_id=main, timeout=10) or []
+                in_group = {int(m["user_id"]) for m in members}
+            except Exception as e:
+                error = f"查不到大群成员：{e}"
+        else:
+            error = "还没在配置页填大群群号"
+        return render(request, "overdue.html", rows=bot.overdue.all(), in_group=in_group, error=error)
+
+    @app.post("/overdue/add")
+    async def overdue_add(request: Request, name: str = Form(""), qq: str = Form(""), deadlines: str = Form(""),
+                          note: str = Form("")):
+        rows, skipped = overdue_mod.parse_paste("\t".join([name, deadlines, qq, note]))
+        if rows:
+            bot.overdue.save(rows, "web")
+            flash(request, f"已加入逾期名单：{rows[0].name}")
+        else:
+            flash(request, "请填写名字和正确的 QQ 号", "err")
+        return RedirectResponse("/overdue", status_code=303)
+
+    @app.post("/overdue/import")
+    async def overdue_import(request: Request, text: str = Form("")):
+        rows, skipped = overdue_mod.parse_paste(text)
+        bot.overdue.save(rows, "web")
+        flash(request, f"已导入 {len(rows)} 人（同一个 QQ 号已在名单上的，以这次为准）")
+        if skipped:
+            flash(request, "这些行没有导入，QQ 号不是数字，可以手动补：" + "、".join(skipped), "err")
+        return RedirectResponse("/overdue", status_code=303)
+
+    @app.post("/overdue/{qq}/delete")
+    async def overdue_delete(request: Request, qq: int):
+        bot.overdue.delete(qq, "web")
+        flash(request, f"已把 QQ {qq} 移出逾期名单")
+        return RedirectResponse("/overdue", status_code=303)
 
     # ---------- 人物卡 ----------
     @app.get("/cards")

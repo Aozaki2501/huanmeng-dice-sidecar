@@ -73,6 +73,8 @@
   .cards .deleted img { opacity: .35; }
   @media (max-width: 560px) {
     .brand { display: none; } main { padding: 12px 16px; }
+    nav { display: flex; overflow-x: auto; min-width: 0; } nav a { padding: 6px 7px; }
+    button.link { white-space: nowrap; }
     table.ledger thead { display: none; }
     table.ledger, table.ledger tbody, table.ledger tr, table.ledger td { display: block; width: 100%; }
     table.ledger td { padding: 4px 12px; }
@@ -89,6 +91,7 @@
   <nav>
     <a href="/texts" class="{{ 'on' if path.startswith('/texts') }}">文案</a>
     <a href="/ledger" class="{{ 'on' if path.startswith('/ledger') }}">团账本</a>
+    <a href="/overdue" class="{{ 'on' if path.startswith('/overdue') }}">逾期名单</a>
     <a href="/cards" class="{{ 'on' if path.startswith('/cards') }}">人物卡</a>
     <a href="/settings" class="{{ 'on' if path.startswith('/settings') }}">配置</a>
   </nav>

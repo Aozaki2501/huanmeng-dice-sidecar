@@ -48,6 +48,28 @@ def plain_text(message) -> str | None:
     return "".join(parts).strip() or None
 
 
+def command_text(message, self_id: int | None) -> str | None:
+    """识别指令用的文字。和 plain_text 不同，这里容忍「回复」和「@」：
+    在 QQ 里回复一条消息时，客户端会自动带上回复引用和对原发送者的 @，
+    管理员回复骰娘的记团公告发 `.团 消 …` 是很自然的用法。
+    @ 骰娘自己的去掉；@ 别人的换成 QQ 号，这样 `.团 消 @某人` 等同于按 QQ 号消团。
+    含图片等其他内容时返回 None。"""
+    if isinstance(message, str):
+        return plain_text(message)
+    parts = []
+    for seg in message:
+        kind, data = seg.get("type"), seg.get("data") or {}
+        if kind == "text":
+            parts.append(data.get("text", ""))
+        elif kind == "at":
+            qq = str(data.get("qq", ""))
+            if qq.isdigit() and int(qq) != self_id:
+                parts.append(f" {qq} ")
+        elif kind != "reply":
+            return None
+    return " ".join("".join(parts).split()) or None
+
+
 def parse_command(text: str, names: tuple[str, ...]) -> tuple[str, str] | None:
     """识别 `.指令 参数`，中文指令和参数之间可以不加空格。返回 (指令, 参数)。"""
     text = text.strip()
@@ -120,6 +142,7 @@ class Bot:
             if settled:
                 await self.settle_repeat(group_id, settled)
 
+        text = command_text(event.get("message", []), self.onebot.self_id)
         if text is None:
             return
         reply = lambda key, **v: self.send(("group", group_id), key, **v)

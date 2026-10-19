@@ -317,3 +317,31 @@ def test_ledger_change_replaces_group_notice(fb):
     assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20）")
     feed(fb, msg(100, P[6], ".团 消 巧克力"))
     assert len(fb.notices) == 3 and fb.notices[-1]["message"]["text"].endswith("&#10;暂无。")
+
+
+def test_clear_by_replying_to_announcement(fb):
+    """回复骰娘的记团公告来消团：消息里带着回复引用和对骰娘的 @，之前会被整条忽略。"""
+    fb.roles[(100, P[6])] = "admin"
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 5)), msg(200, P[9], "停"))
+    e = msg(200, P[6], "")
+    e["message"] = [{"type": "reply", "data": {"id": "1"}}, {"type": "at", "data": {"qq": str(BOT_QQ)}},
+                    {"type": "text", "data": {"text": " .团 消 10002"}}]
+    feed(fb, e)
+    assert fb.sent[-1][2].endswith("已还清。")
+
+
+def test_clear_by_at(fb):
+    fb.roles[(100, P[6])] = "admin"
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 5)), msg(200, P[9], "停"))
+    e = msg(200, P[6], "")
+    e["message"] = [{"type": "text", "data": {"text": ".团 消 "}}, {"type": "at", "data": {"qq": str(P[2])}}]
+    feed(fb, e)
+    assert fb.sent[-1][2].endswith("已还清。")
+
+
+def test_at_and_reply_still_break_repeat_chain(fb):
+    """指令识别放宽了，复读链仍然只认纯文字：带 @ 或回复的消息会打断，不会续链。"""
+    e = msg(200, P[4], "")
+    e["message"] = [{"type": "at", "data": {"qq": str(P[1])}}, {"type": "text", "data": {"text": "草"}}]
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 4)), e, msg(200, P[5], "草"), msg(200, P[9], "停"))
+    assert fb.ledger.person(P[2]) is None

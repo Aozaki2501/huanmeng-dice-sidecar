@@ -125,7 +125,7 @@ def test_roulette_full_game():
     order = rr.games[g].order
     assert [p.roll for p in order] == sorted((p.roll for p in order), reverse=True)
     assert rr.shoot(g, order[1].id, 15).key == "rr.shoot_not_turn"
-    bullet = rr.games[g].bullet
+    [bullet] = rr.games[g].bullets
     for i in range(bullet):
         assert rr.shoot(g, order[i].id, 15).key == "rr.click"
     out = rr.shoot(g, order[bullet].id, 15)
@@ -144,6 +144,51 @@ def test_roulette_timeout_and_off(monkeypatch):
     assert rr.status(1, 15).key == "rr.status_signup"
     assert rr.off(1, False, 15).key == "rr.off_denied"
     assert rr.off(1, True, 15).key == "rr.off"
+
+
+@pytest.mark.parametrize("empty_chamber", range(MAX_PLAYERS))
+def test_caucasus_full_game(empty_chamber):
+    rr = Roulette(random.Random(1))
+    for i in range(1, MAX_PLAYERS + 1):
+        rr.join(1, P[i], f"P{i}", 15, caucasus=True)
+    game = rr.games[1]
+    while not game.order:
+        for p in [p for p in game.players if not p.roll]:
+            rr.roll(1, p.id, 15)
+    assert len(game.bullets) == 5
+    # 遍历全部六种空弹位，包含最后一枪空枪与最后一枪中弹。
+    game.bullets = set(range(MAX_PLAYERS)) - {empty_chamber}
+    victims = []
+    for i, player in enumerate(game.order):
+        assert rr.shoot(1, game.order[(i + 1) % MAX_PLAYERS].id, 15).key == "rr.shoot_not_turn"
+        assert game.turn == i
+        out = rr.shoot(1, player.id, 15)
+        hit = i != empty_chamber
+        assert bool(out.shot) == hit
+        if hit:
+            victims.append(out.shot.id)
+        assert out.key == ("cr.bang" if hit else "cr.click") + ("_last" if i == 5 else "")
+        if i < 5:
+            assert rr.status(1, 15).values["shots"] == i + 1
+            assert rr.shoot(1, player.id, 15).key == "rr.shoot_not_turn"
+        else:
+            assert out.values["survivor"] == game.order[empty_chamber].name
+    assert len(set(victims)) == 5
+    assert game.order[empty_chamber].id not in victims
+    assert 1 not in rr.games
+    assert rr.shoot(1, game.order[-1].id, 15).key == "rr.shoot_none"
+
+
+def test_roulette_modes_cannot_mix():
+    rr = Roulette()
+    rr.join(1, P[1], "P1", 15, caucasus=True)
+    assert rr.join(1, P[2], "P2", 15).key == "rr.mode_conflict"
+    assert len(rr.games[1].players) == 1
+    # 不同群独立，最后一人退报名后可换玩法。
+    assert rr.join(2, P[2], "P2", 15).key == "rr.join"
+    assert rr.join(2, P[3], "P3", 15, caucasus=True).key == "rr.mode_conflict"
+    assert rr.quit(1, P[1], "P1", 15).key == "rr.quit"
+    assert rr.join(1, P[2], "P2", 15).key == "rr.join"
 
 
 # ---------- 接入 bot：记团、公告、名单格式 ----------
@@ -290,13 +335,82 @@ def test_roulette_bang_records_and_announces(fb):
     game = fb.roulette.games[200]
     while not game.order:
         feed(fb, *(msg(200, p.id, ".轮盘 roll") for p in game.players if not p.roll))
-    order, bullet = game.order, game.bullet
+    order = game.order
+    [bullet] = game.bullets
     fb.sent.clear()
     feed(fb, *(msg(200, order[i].id, ".开枪") for i in range(bullet + 1)))
     victim = order[bullet]
     assert [(k, g) for k, g, _ in fb.sent[-2:]] == [("group", 200), ("group", 100)]
     assert "中弹倒地" in fb.sent[-2][2] and "【记团公告】" in fb.sent[-1][2]
     assert fb.ledger.person(victim.id).deadlines
+
+
+@pytest.mark.parametrize("group", [100, 200])
+@pytest.mark.parametrize("empty_chamber", range(MAX_PLAYERS))
+def test_caucasus_records_five_people_and_announces(fb, group, empty_chamber):
+    fb.roulette.rng = random.Random(3)
+    feed(fb, *(msg(group, P[i], ".高加索轮盘 报名") for i in range(1, 7)))
+    assert "高加索轮盘" in fb.sent[-1][2]
+    game = fb.roulette.games[group]
+    while not game.order:
+        feed(fb, *(msg(group, p.id, ".高加索 掷点") for p in game.players if not p.roll))
+    assert "5颗子弹" in fb.sent[-1][2]
+    game.bullets = set(range(MAX_PLAYERS)) - {empty_chamber}
+    fb.sent.clear()
+    for player in game.order:
+        feed(fb, msg(group, player.id, ".开枪"))
+        # 同一个人重发不应再写入账本。
+        before = len(fb.ledger.records())
+        feed(fb, msg(group, player.id, ".开枪"))
+        assert len(fb.ledger.records()) == before
+    records = fb.ledger.records()
+    assert len(records) == 5
+    assert {r["qq"] for r in records} == {p.id for i, p in enumerate(game.order) if i != empty_chamber}
+    assert all(r["source"] == "rr" for r in records)
+    assert fb.ledger.person(game.order[empty_chamber].id) is None
+    assert len([t for _, _, t in fb.sent if "记一团，死线" in t]) == (5 if group == 100 else 10)
+    assert any("唯一生还者" in t and game.order[empty_chamber].name in t for _, _, t in fb.sent)
+    assert len(fb.notices) == 1  # 每次更新名单公告，只保留最后一份。
+    assert group not in fb.roulette.games
+
+
+@pytest.mark.parametrize("end", ["off", "timeout"])
+def test_caucasus_partial_game_keeps_recorded_debts(fb, end):
+    feed(fb, *(msg(200, P[i], ".高加索 报名") for i in range(1, 7)))
+    game = fb.roulette.games[200]
+    while not game.order:
+        feed(fb, *(msg(200, p.id, ".高加索 掷点") for p in game.players if not p.roll))
+    game.bullets = set(range(5))
+    feed(fb, msg(200, game.order[0].id, ".高加索 开枪"))
+    assert len(fb.ledger.records()) == 1
+    if end == "off":
+        feed(fb, msg(200, P[9], ".高加索 结束"))
+        assert fb.sent[-1][2] == "只有管理员可以强制结束。"
+        assert 200 in fb.roulette.games
+        feed(fb, msg(200, P[9], ".高加索 结束", role="admin"))
+        assert "已经记下的欠团保留" in fb.sent[-1][2]
+    else:
+        game.updated -= 16 * 60
+        feed(fb, msg(200, P[9], ".高加索"))
+        assert "当前没有进行中的轮盘" in fb.sent[-1][2]
+    assert len(fb.ledger.records()) == 1
+    assert 200 not in fb.roulette.games
+
+
+def test_caucasus_help_and_mode_conflicts(fb):
+    feed(fb, msg(200, P[1], ".高加索轮盘"))
+    assert "5颗子弹" in fb.sent[-1][2]
+    assert "已记团保留" in fb.sent[-1][2]
+    feed(fb, msg(200, P[1], ".高加索 报名"), msg(200, P[2], ".轮盘 报名"))
+    assert "本群已有高加索轮盘" in fb.sent[-1][2]
+    assert len(fb.roulette.games[200].players) == 1
+    feed(fb, msg(100, P[1], ".轮盘 报名"), msg(100, P[2], ".高加索 报名"))
+    assert "本群已有俄罗斯轮盘" in fb.sent[-1][2]
+    feed(fb, msg(100, P[1], ".高加索 开枪"))
+    assert "本群已有俄罗斯轮盘" in fb.sent[-1][2]
+    assert len(fb.roulette.games[100].players) == 1
+    feed(fb, msg(100, P[1], ".高加索 help"))
+    assert "5颗子弹" in fb.sent[-1][2]
 
 
 def test_card_command_in_group(fb):

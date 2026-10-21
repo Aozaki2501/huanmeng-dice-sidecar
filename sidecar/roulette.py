@@ -1,6 +1,6 @@
 """俄罗斯轮盘，行为与《记团.js》一致：
 每群一局，满 6 人开局；开局后各自 `.轮盘 roll` 掷 d100，点大者先开枪，点数相同者重掷；
-左轮装 1 颗子弹，位置随机，按顺序 `.开枪`；中弹者记一团。
+普通轮盘装 1 颗子弹，中弹后结束；高加索轮盘装 5 颗子弹，六人各开一枪，中弹者各记一团。
 开局后超过设定分钟无人操作则作废（报名阶段不计时）。对局只存在内存里。
 
 这里只管对局状态，返回要发送的文案键和变量，记团和发送由 bot 负责。"""
@@ -23,7 +23,8 @@ class Game:
     players: list[Player] = field(default_factory=list)
     started: bool = False
     order: list[Player] | None = None
-    bullet: int = 0
+    caucasus: bool = False
+    bullets: set[int] = field(default_factory=set)
     turn: int = 0
     updated: float = field(default_factory=time.monotonic)
 
@@ -73,11 +74,13 @@ class Roulette:
         return Outcome("rr.status_playing", {"shots": game.turn, "left": MAX_PLAYERS - game.turn,
                                              "order": game.order_text(), "current": game.order[game.turn].name})
 
-    def join(self, group_id: int, uid: int, name: str, timeout: int) -> Outcome:
+    def join(self, group_id: int, uid: int, name: str, timeout: int, *, caucasus: bool = False) -> Outcome:
         game = self.get(group_id, timeout)
+        if game and game.caucasus != caucasus:
+            return Outcome("rr.mode_conflict", {"mode": "高加索轮盘" if game.caucasus else "俄罗斯轮盘"})
         if game and game.started:
             return Outcome("rr.join_started")
-        game = game or Game()
+        game = game or Game(caucasus=caucasus)
         if game.find(uid):
             return Outcome("rr.join_dup", {"name": name, "count": len(game.players), "max": MAX_PLAYERS})
         game.players.append(Player(uid, name))
@@ -131,7 +134,8 @@ class Roulette:
             return Outcome("rr.tie", {**base, "tied": text})
 
         game.order = sorted(game.players, key=lambda p: p.roll, reverse=True)
-        game.bullet = self.rng.randrange(MAX_PLAYERS)
+        chamber = self.rng.randrange(MAX_PLAYERS)
+        game.bullets = set(range(MAX_PLAYERS)) - {chamber} if game.caucasus else {chamber}
         game.turn = 0
         return Outcome("rr.order_ready", {**base, "order": game.order_text(), "first": game.order[0].name})
 
@@ -144,10 +148,22 @@ class Roulette:
         current = game.order[game.turn]
         if current.id != uid:
             return Outcome("rr.shoot_not_turn", {"current": current.name})
-        if game.turn == game.bullet:
+        hit = game.turn in game.bullets
+        if hit and not game.caucasus:
             del self.games[group_id]
             return Outcome("rr.bang", {"name": current.name}, shot=current)
         game.turn += 1
+        if game.caucasus:
+            values = {"name": current.name}
+            if game.turn == MAX_PLAYERS:
+                del self.games[group_id]
+                values["survivor"] = next(p.name for i, p in enumerate(game.order) if i not in game.bullets)
+                key = "cr.bang_last" if hit else "cr.click_last"
+            else:
+                self._touch(group_id, game)
+                values.update(left=MAX_PLAYERS - game.turn, next=game.order[game.turn].name)
+                key = "cr.bang" if hit else "cr.click"
+            return Outcome(key, values, shot=current if hit else None)
         self._touch(group_id, game)
         return Outcome("rr.click", {"name": current.name, "left": MAX_PLAYERS - game.turn,
                                     "next": game.order[game.turn].name})

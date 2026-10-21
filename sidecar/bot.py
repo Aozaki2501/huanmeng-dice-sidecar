@@ -28,7 +28,7 @@ PREFIXES = (".", "。")
 # 海豹的指令前缀；以这些开头、后面紧跟文字的消息算作指令，不能开链续链
 _COMMAND_LIKE = re.compile(r"^[.。!/]\s*[A-Za-z一-鿿]")
 CARD_COMMANDS = ("存卡", "取卡", "删卡")
-RR_COMMANDS = ("轮盘", "开枪")  # 不用 .rr：海豹会把它当成 .r 掷骰
+RR_COMMANDS = ("高加索轮盘", "高加索", "轮盘", "开枪")  # 不用 .rr：海豹会把它当成 .r 掷骰
 LEDGER_COMMANDS = ("团", "jt")
 CARD_WAIT_SECONDS = 180  # `.存卡 <卡名>` 之后多久内发的图片算数
 JOIN_CHECK_DELAY = 5  # 骰娘进新群后等几秒再查成员，让成员列表先同步
@@ -370,10 +370,18 @@ class Bot:
         timeout = self.settings.get("rr_timeout_minutes")
         sub = "shoot" if cmd == "开枪" else (args.split() or [""])[0]
         rr = self.roulette
+        game = rr.get(group_id, timeout)
+        requested_caucasus = cmd in ("高加索轮盘", "高加索")
+        caucasus = game.caucasus if game else requested_caucasus
+        prefix = "cr" if caucasus else "rr"
+        if requested_caucasus and game and not game.caucasus and sub not in ("help", "list", "名单"):
+            await self.send(("group", group_id), "rr.mode_conflict", mode="俄罗斯轮盘")
+            return
         if sub == "help":
+            prefix = "cr" if requested_caucasus else "rr"
             out = Outcome("rr.help")
         elif sub in ("join", "报名"):
-            out = rr.join(group_id, uid, name, timeout)
+            out = rr.join(group_id, uid, name, timeout, caucasus=requested_caucasus)
         elif sub in ("quit", "退出"):
             out = rr.quit(group_id, uid, name, timeout)
         elif sub in ("roll", "掷点"):
@@ -392,15 +400,18 @@ class Bot:
         else:
             out = Outcome("rr.help")
 
+        mode_key = out.key.replace("rr.", "cr.", 1) if caucasus else out.key
+        key = mode_key if mode_key in tpl.BY_KEY else out.key
         if out.key == "rr.help":
-            await self.send(("group", group_id), "rr.help", timeout=timeout)
+            await self.send(("group", group_id), f"{prefix}.help", timeout=timeout)
         elif out.key == "rr.status_none":
-            help_text = self.templates.render_text("rr.help", timeout=timeout) or ""
+            help_text = self.templates.render_text(f"{prefix}.help", timeout=timeout) or ""
             await self.send(("group", group_id), "rr.status_none", help=help_text)
         elif out.shot:
-            await self.record(group_id, out.shot.id, out.shot.name, "rr", "rr.bang", "rr.announce")
+            values = {k: v for k, v in out.values.items() if k != "name"}
+            await self.record(group_id, out.shot.id, out.shot.name, "rr", key, f"{prefix}.announce", **values)
         else:
-            await self.send(("group", group_id), out.key, **out.values)
+            await self.send(("group", group_id), key, **out.values)
 
     # ---------- 团账本 ----------
     def ledger_list_text(self, with_qq: bool = False) -> str:

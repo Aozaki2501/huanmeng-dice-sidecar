@@ -112,7 +112,7 @@ def test_save_list_get_delete(fb):
 
 def test_image_after_timeout_ignored(fb):
     feed(fb, pm(P[1], ".存卡 调查员A"))
-    fb.waiting_cards[P[1]] = ("调查员A", 0)
+    fb.waiting_cards[P[1]] = (P[1], "调查员A", 0)
     feed(fb, pm(P[1], image=True))
     assert fb.cards.current(P[1]) == []
 
@@ -146,6 +146,109 @@ def test_get_others_card_needs_main_group_member(fb):
     assert fb.sent[-1][2].startswith(f"{P[1]}的人物卡：\n1. 调查员A")
     feed(fb, pm(P[2], f".取卡 {P[1]} 1"))
     assert fb.sent[-1][2] == "[image]"
+
+
+@pytest.mark.parametrize("role", ["owner", "admin"])
+def test_main_group_admin_saves_others_card(fb, role):
+    import json
+
+    fb.roles[(100, P[2])] = role
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员 A", image=True))
+    card = fb.cards.find(P[1], "调查员 A")
+    assert card is not None and fb.cards.file(card).read_bytes() == PNG
+    assert fb.cards.current(P[2]) == []
+    assert fb.sent[-1] == ("private", P[2], f"已为 QQ {P[1]} 存档人物卡「调查员 A」。")
+    assert not any(uid == P[1] for _, uid, _ in fb.sent)
+    op = fb.conn.execute("SELECT * FROM op_log WHERE action = 'card.save'").fetchone()
+    assert op["operator"] == str(P[2])
+    assert json.loads(op["after"])["qq"] == P[1]
+    # 卡主可自行取回、更新和删除代存的卡。
+    feed(fb, pm(P[1], ".取卡 1"))
+    assert fb.sent[-1] == ("private", P[1], "[image]")
+    feed(fb, pm(P[1], ".存卡 调查员 A", image=True))
+    assert fb.cards.find(P[1], "调查员 A")["id"] != card["id"]
+    feed(fb, pm(P[1], ".删卡 调查员 A"))
+    assert fb.cards.current(P[1]) == []
+
+
+def test_admin_delayed_upload_keeps_owner_and_waits_independently(fb):
+    fb.roles[(100, P[2])] = "admin"
+    feed(fb, pm(P[1], ".存卡 自存卡"), pm(P[2], f".存卡 {P[1]} 代存卡"))
+    assert f"将保存到 QQ {P[1]} 名下" in fb.sent[-1][2]
+    feed(fb, pm(P[2], image=True))
+    assert fb.cards.find(P[1], "代存卡") is not None
+    assert fb.cards.current(P[2]) == []
+    assert P[1] in fb.waiting_cards and P[2] not in fb.waiting_cards
+    feed(fb, pm(P[1], image=True))
+    assert [c["name"] for c in fb.cards.current(P[1])] == ["代存卡", "自存卡"]
+
+
+@pytest.mark.parametrize("image", [True, False])
+@pytest.mark.parametrize("permission", ["member", "outsider", "small_group_admin", "ledger_admin", "no_main_group"])
+def test_non_main_admin_cannot_save_others_card(fb, image, permission):
+    if permission == "outsider":
+        fb.outsiders.add((100, P[2]))
+    elif permission == "small_group_admin":
+        fb.roles[(200, P[2])] = "admin"
+    elif permission == "ledger_admin":
+        fb.settings.update({"ledger_admins": [P[2]]}, "test")
+    elif permission == "no_main_group":
+        fb.settings.update({"main_group": None}, "test")
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A", image=image))
+    assert "只有大群群主或管理员可以代存" in fb.sent[-1][2]
+    assert P[2] not in fb.waiting_cards
+    feed(fb, pm(P[2], image=True))
+    assert fb.cards.current(P[1]) == fb.cards.current(P[2]) == []
+
+
+def test_admin_permission_rechecked_when_image_arrives(fb):
+    fb.roles[(100, P[2])] = "admin"
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A"))
+    assert P[2] in fb.waiting_cards
+    fb.roles[(100, P[2])] = "member"
+    feed(fb, pm(P[2], image=True))
+    assert "只有大群群主或管理员可以代存" in fb.sent[-1][2]
+    assert fb.cards.current(P[1]) == []
+    assert P[2] not in fb.waiting_cards
+
+
+def test_proxy_upload_timeout_and_replaced_request(fb):
+    fb.roles[(100, P[2])] = "admin"
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A"))
+    fb.waiting_cards[P[2]] = (P[1], "调查员A", 0)
+    feed(fb, pm(P[2], image=True))
+    assert fb.cards.current(P[1]) == []
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A"), pm(P[2], ".存卡 自己的卡"), pm(P[2], image=True))
+    assert fb.cards.current(P[1]) == []
+    assert fb.cards.find(P[2], "自己的卡") is not None
+
+
+def test_proxy_save_failure_replies_to_operator(fb):
+    fb.roles[(100, P[2])] = "admin"
+    def broken(url):
+        raise OSError("断网")
+    fb.http_get = broken
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A", image=True))
+    assert fb.sent[-1] == ("private", P[2], "人物卡「调查员A」的图片没能保存，请重新发送一次。")
+    assert fb.cards.current(P[1]) == fb.cards.current(P[2]) == []
+
+
+def test_proxy_save_permission_lookup_failure(fb):
+    from sidecar.onebot import ActionError
+
+    async def broken(action, **params):
+        if action == "get_group_member_info":
+            raise ActionError("查询失败")
+        return await orig(action, **params)
+    orig, fb.onebot.call = fb.onebot.call, broken
+    feed(fb, pm(P[2], f".存卡 {P[1]} 调查员A", image=True))
+    assert "只有大群群主或管理员可以代存" in fb.sent[-1][2]
+    assert fb.cards.current(P[1]) == []
+
+
+def test_explicit_self_owner_and_numeric_card_name(fb):
+    feed(fb, pm(P[1], f".存卡 {P[1]} 调查员A", image=True), pm(P[1], ".存卡 123456", image=True))
+    assert [c["name"] for c in fb.cards.current(P[1])] == ["调查员A", "123456"]
 
 
 def test_card_commands_in_group_redirect(fb):

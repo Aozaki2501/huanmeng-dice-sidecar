@@ -109,7 +109,7 @@ class Bot:
         self.conn = conn
         self.cards = Cards(conn, data_dir / "cards")
         self.overdue = Overdue(conn)
-        self.waiting_cards: dict[int, tuple[str, float]] = {}  # QQ -> (卡名, 截止时间)
+        self.waiting_cards: dict[int, tuple[int, str, float]] = {}  # 上传者 QQ -> (归属 QQ, 卡名, 截止时间)
         self.http_get = http_get
         self.join_check_delay = JOIN_CHECK_DELAY
         self.settings = Settings(conn)
@@ -163,9 +163,9 @@ class Bot:
         elif cmd := parse_command(text, LEDGER_COMMANDS):
             await self.on_ledger(event, ("private", uid), cmd[1])
         elif images and uid in self.waiting_cards:
-            name, until = self.waiting_cards.pop(uid)
+            owner, name, until = self.waiting_cards.pop(uid)
             if time.monotonic() <= until:
-                await self.save_card(uid, name, images[0])
+                await self.save_card(uid, name, images[0], owner=owner)
 
     # ---------- 入群欢迎与拉群校验 ----------
     async def on_group_increase(self, group_id: int, user_id: int) -> None:
@@ -228,13 +228,22 @@ class Bot:
     async def on_card(self, uid: int, cmd: str, args: str, images: list[dict]) -> None:
         target = ("private", uid)
         if cmd == "存卡":
+            self.waiting_cards.pop(uid, None)
             if not args:
                 await self.send(target, "card.save_usage")
-            elif images:
-                await self.save_card(uid, args, images[0])
+                return
+            parts = args.split(maxsplit=1)
+            owner, name = uid, args
+            if len(parts) == 2 and _QQ.fullmatch(parts[0]):
+                owner, name = int(parts[0]), parts[1]
+            if images:
+                await self.save_card(uid, name, images[0], owner=owner)
+            elif owner != uid and not await self.is_main_group_admin(uid, include_ledger_admins=False):
+                await self.send(target, "card.save_other_denied")
             else:
-                self.waiting_cards[uid] = (args, time.monotonic() + CARD_WAIT_SECONDS)
-                await self.send(target, "card.wait_image", name=args)
+                self.waiting_cards[uid] = (owner, name, time.monotonic() + CARD_WAIT_SECONDS)
+                key = "card.wait_image_other" if owner != uid else "card.wait_image"
+                await self.send(target, key, name=name, qq=owner)
         elif cmd == "取卡":
             parts = args.split(maxsplit=1)
             owner = uid
@@ -269,17 +278,23 @@ class Bot:
             self.cards.delete(uid, card["name"], str(uid))
             await self.send(target, "card.deleted", name=card["name"])
 
-    async def save_card(self, uid: int, name: str, image: dict) -> None:
+    async def save_card(self, uid: int, name: str, image: dict, *, owner: int | None = None) -> None:
         self.waiting_cards.pop(uid, None)
+        owner = uid if owner is None else owner
+        # 补发图片时重新核验管理员身份，避免等待期间权限变更后仍能代存。
+        if owner != uid and not await self.is_main_group_admin(uid, include_ledger_admins=False):
+            await self.send(("private", uid), "card.save_other_denied")
+            return
         try:
             data = await self.download_image(image)
-            self.cards.save(uid, name, data)
+            self.cards.save(owner, name, data, operator=str(uid))
         except Exception as e:
-            log.error("保存 %s 的人物卡「%s」失败：%s", uid, name, e)
+            log.error("%s 保存 %s 的人物卡「%s」失败：%s", uid, owner, name, e)
             await self.send(("private", uid), "card.save_failed", name=name)
             return
-        log.info("存卡：%s「%s」", uid, name)
-        await self.send(("private", uid), "card.saved", name=name)
+        log.info("存卡：%s 为 %s 保存「%s」", uid, owner, name)
+        key = "card.saved_other" if owner != uid else "card.saved"
+        await self.send(("private", uid), key, name=name, qq=owner)
 
     async def download_image(self, image: dict) -> bytes:
         """QQ 图片链接会过期，收到就下载。直接下载失败时，向协议端要一个新链接再试。"""
@@ -325,8 +340,8 @@ class Bot:
             await self.send(("group", main), announce_key, **values)
         await self.refresh_notice()
 
-    async def is_main_group_admin(self, user_id: int) -> bool:
-        if user_id in self.settings.get("ledger_admins"):
+    async def is_main_group_admin(self, user_id: int, *, include_ledger_admins: bool = True) -> bool:
+        if include_ledger_admins and user_id in self.settings.get("ledger_admins"):
             return True
         main = self.settings.get("main_group")
         if not main:

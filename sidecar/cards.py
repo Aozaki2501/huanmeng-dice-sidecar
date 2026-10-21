@@ -28,7 +28,7 @@ class Cards:
     def file(self, row) -> Path:
         return self.root / row["path"]
 
-    def save(self, qq: int, name: str, data: bytes) -> int:
+    def save(self, qq: int, name: str, data: bytes, *, operator: str | None = None) -> int:
         ts = int(time.time())
         stem = f"{time.strftime('%Y%m%d-%H%M%S')}_{_UNSAFE.sub('_', name)[:40]}"
         rel = Path(str(qq)) / f"{stem}.{image_ext(data)}"
@@ -41,7 +41,8 @@ class Cards:
         self.conn.execute("BEGIN")
         cur = self.conn.execute("INSERT INTO cards (qq, name, path, created_at) VALUES (?, ?, ?, ?)",
                                 (qq, name, rel.as_posix(), ts))
-        log_op(self.conn, str(qq), "card.save", None, {"qq": qq, "name": name, "path": rel.as_posix()})
+        log_op(self.conn, str(qq) if operator is None else operator, "card.save", None,
+               {"qq": qq, "name": name, "path": rel.as_posix()})
         self.conn.execute("COMMIT")
         return cur.lastrowid
 

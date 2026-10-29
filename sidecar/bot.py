@@ -295,6 +295,9 @@ class Bot:
         log.info("存卡：%s 为 %s 保存「%s」", uid, owner, name)
         key = "card.saved_other" if owner != uid else "card.saved"
         await self.send(("private", uid), key, name=name, qq=owner)
+        group = self.settings.get("card_announce_group")
+        if group:
+            await self.send(("group", group), "card.announce", qq=owner, name=name)
 
     async def download_image(self, image: dict) -> bytes:
         """QQ 图片链接会过期，收到就下载。直接下载失败时，向协议端要一个新链接再试。"""

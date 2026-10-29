@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from sidecar import db
 from sidecar.config import Config, hash_password
+from sidecar.onebot import ActionError
 from sidecar.web import create_app
 from test_ledger import BOT_QQ, P, FakeBot, feed
 
@@ -13,7 +14,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 20
 @pytest.fixture
 def fb(tmp_path):
     bot = FakeBot(db.connect(tmp_path / "t.db"), tmp_path)
-    bot.settings.update({"main_group": 100}, "test")
+    bot.settings.update({"main_group": 100, "card_announce_group": None}, "test")
     bot.join_check_delay = 0
     bot.http_get = lambda url: PNG
     return bot
@@ -255,6 +256,138 @@ def test_card_commands_in_group_redirect(fb):
     from test_ledger import msg
     feed(fb, msg(100, P[1], ".取卡"))
     assert fb.sent[-1][2] == "人物卡指令请私聊骰娘使用。"
+
+
+# ---------- 存卡通知 ----------
+@pytest.fixture
+def announcing_bot(fb):
+    fb.settings.update({"card_announce_group": 779254872}, "test")
+    return fb
+
+
+@pytest.mark.parametrize("separate_image", [False, True])
+def test_save_announces_only_after_image_saved(announcing_bot, separate_image):
+    bot = announcing_bot
+    feed(bot, pm(P[1], ".存卡 调查员A", image=not separate_image))
+    if separate_image:
+        assert not any(kind == "group" for kind, _, _ in bot.sent)
+        feed(bot, pm(P[1], image=True))
+    assert bot.cards.file(bot.cards.current(P[1])[0]).read_bytes() == PNG
+    assert bot.sent[-2:] == [
+        ("private", P[1], "已存档人物卡「调查员A」。"),
+        ("group", 779254872, f"【存卡通知】QQ {P[1]} 已存档人物卡「调查员A」。\n"
+         f"管理可私聊骰娘发送 .取卡 {P[1]} 调查员A 查看。"),
+    ]
+    assert not any(action == "_send_group_notice" for action, _ in bot.calls)
+
+
+def test_same_name_update_announces_again(announcing_bot):
+    bot = announcing_bot
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True), pm(P[1], ".存卡 调查员A", image=True))
+    assert len([s for s in bot.sent if s[0] == "group"]) == 2
+    assert bot.conn.execute("SELECT count(*) FROM cards").fetchone()[0] == 2
+    assert len(bot.cards.current(P[1])) == 1
+
+
+@pytest.mark.parametrize("failure", ["download", "storage"])
+def test_failed_save_does_not_announce(announcing_bot, monkeypatch, failure):
+    bot = announcing_bot
+
+    def broken(*args, **kwargs):
+        raise OSError("磁盘或网络故障")
+
+    if failure == "download":
+        bot.http_get = broken
+    else:
+        monkeypatch.setattr(bot.cards, "save", broken)
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True))
+    assert bot.sent == [("private", P[1], "人物卡「调查员A」的图片没能保存，请重新发送一次。")]
+    assert bot.cards.current(P[1]) == []
+
+
+def test_invalid_or_expired_save_does_not_announce(announcing_bot):
+    bot = announcing_bot
+    from test_ledger import msg
+    feed(bot, pm(P[1], ".存卡", image=True), msg(100, P[1], ".存卡 调查员A"),
+         pm(P[1], ".存卡 调查员A"))
+    bot.waiting_cards[P[1]] = (P[1], "调查员A", 0)
+    feed(bot, pm(P[1], image=True), pm(P[2], image=True))
+    assert not any(kind == "group" and gid == 779254872 for kind, gid, _ in bot.sent)
+    assert bot.cards.current(P[1]) == []
+
+
+@pytest.mark.parametrize("separate_image", [False, True])
+def test_proxy_save_announces_card_owner(announcing_bot, separate_image):
+    bot = announcing_bot
+    bot.roles[(100, P[2])] = "admin"
+    feed(bot, pm(P[2], f".存卡 {P[1]} 代存卡", image=not separate_image))
+    if separate_image:
+        assert not any(kind == "group" for kind, _, _ in bot.sent)
+        feed(bot, pm(P[2], image=True))
+    assert bot.cards.find(P[1], "代存卡") is not None
+    assert bot.cards.current(P[2]) == []
+    assert bot.sent[-1] == ("group", 779254872,
+                            f"【存卡通知】QQ {P[1]} 已存档人物卡「代存卡」。\n"
+                            f"管理可私聊骰娘发送 .取卡 {P[1]} 代存卡 查看。")
+
+
+def test_denied_proxy_save_does_not_announce(announcing_bot):
+    bot = announcing_bot
+    feed(bot, pm(P[2], f".存卡 {P[1]} 代存卡", image=True))
+    assert not any(kind == "group" for kind, _, _ in bot.sent)
+    assert bot.cards.current(P[1]) == []
+
+
+def test_announcement_target_changes_and_can_be_disabled(announcing_bot):
+    bot = announcing_bot
+    bot.settings.update({"card_announce_group": 100}, "test")
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True))
+    assert [gid for kind, gid, _ in bot.sent if kind == "group"] == [100]
+    bot.sent.clear()
+    bot.settings.update({"card_announce_group": None}, "test")
+    feed(bot, pm(P[1], ".存卡 调查员B", image=True))
+    assert bot.sent == [("private", P[1], "已存档人物卡「调查员B」。")]
+
+
+def test_announcement_failure_keeps_saved_card(announcing_bot, caplog):
+    bot = announcing_bot
+    original = bot.onebot.call
+
+    async def call(action, **params):
+        if action == "send_group_msg":
+            raise ActionError("群消息发送失败")
+        return await original(action, **params)
+
+    bot.onebot.call = call
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True))
+    assert bot.sent == [("private", P[1], "已存档人物卡「调查员A」。")]
+    assert "card.announce" in caplog.text and "779254872" in caplog.text
+    feed(bot, pm(P[1], ".取卡 调查员A"))
+    assert bot.sent[-1] == ("private", P[1], "[image]")
+
+
+def test_web_announcement_settings_and_template_apply_immediately(tmp_path, announcing_bot):
+    bot = announcing_bot
+    cfg = Config("ws://x", "", ["127.0.0.1"], 0, hash_password("pw"), tmp_path)
+    client = TestClient(create_app(cfg, bot))
+    client.post("/login", data={"password": "pw"})
+    assert "存卡通知群" in client.get("/settings").text
+    assert "存卡群通知" in client.get("/texts").text
+    values = {"main_group": "12345", "card_announce_group": "123456789", "deadline_months": "2",
+              "rr_timeout_minutes": "15"}
+    response = client.post("/settings", data={**values, "card_announce_group": "abc"})
+    assert "不是有效的号码" in response.text
+    assert bot.settings.get("card_announce_group") == 779254872
+    client.post("/settings", data=values)
+    client.post("/texts/card.announce/save", data={"scope": "123456789", "variant": ["新卡：{qq} / {name}"]})
+    feed(bot, pm(P[1], ".存卡 调查员 A", image=True))
+    assert bot.sent[-1] == ("group", 123456789, f"新卡：{P[1]} / 调查员 A")
+    bot.sent.clear()
+    client.post("/texts/card.announce/save", data={"scope": "123456789", "variant": [""]})
+    feed(bot, pm(P[1], ".存卡 调查员B", image=True))
+    assert bot.sent == [("private", P[1], "已存档人物卡「调查员B」。")]
+    client.post("/settings", data={**values, "card_announce_group": ""})
+    assert bot.settings.get("card_announce_group") is None
 
 
 def test_web_cards_page(tmp_path, fb):

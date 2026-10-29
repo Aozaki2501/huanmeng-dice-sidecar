@@ -20,6 +20,7 @@ class SettingDef:
 
 SETTINGS = [
     SettingDef("main_group", "大群群号", "记团公告发到这个群，拉群校验和消团权限也以它为准。", "qq", None),
+    SettingDef("card_announce_group", "存卡通知群", "私聊存卡成功后，向这个群发文字通知。默认管理群 779254872；可填大群群号，留空则关闭。", "qq", 779254872),
     SettingDef("repeat_groups", "复读检测群", "在这些群里检测复读链。留空表示只检测大群。", "qq_list", []),
     SettingDef("ignore_qq", "忽略 QQ", "各类机器人的 QQ 号。它们的消息完全忽略，拉群校验时也不算作大群成员。", "qq_list", []),
     SettingDef("ledger_admins", "记团管理员 QQ", "除大群群主和管理员外，额外允许消团的人。", "qq_list", []),

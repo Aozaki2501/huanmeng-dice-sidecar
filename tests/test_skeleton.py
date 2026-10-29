@@ -86,6 +86,7 @@ def test_scope_ignored_for_non_group_template(conn):
 def test_settings_parse_and_defaults(conn):
     s = settings_mod.Settings(conn)
     assert s.get("deadline_months") == 2
+    assert s.get("card_announce_group") == 779254872
     assert s.repeat_groups == []
     d = settings_mod.BY_KEY
     s.update({"main_group": 12345, "ignore_qq": settings_mod.parse(d["ignore_qq"], "22222，33333\n22222")}, "web")

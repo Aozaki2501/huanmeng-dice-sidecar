@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 log = logging.getLogger("onebot")
 
@@ -116,13 +117,22 @@ class OneBot:
         echo = f"sidecar-{next(self._echo)}"
         fut = asyncio.get_running_loop().create_future()
         self._pending[echo] = fut
-        await self.ws.send(json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False))
         try:
-            resp = await asyncio.wait_for(fut, timeout)
+            async with asyncio.timeout(timeout):
+                await self.ws.send(json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False))
+                resp = await fut
+        except TimeoutError as e:
+            raise ActionError(f"{action} 超时（{timeout} 秒内未完成）") from e
+        except (OSError, ConnectionClosed) as e:
+            raise ActionError(f"{action} 发送失败：{e}") from e
         finally:
             self._pending.pop(echo, None)
-        if resp.get("status") != "ok" and resp.get("retcode") != 0:
-            raise ActionError(f"{action} 失败：{resp.get('message') or resp.get('wording') or resp.get('retcode')}")
+            if not fut.done():
+                fut.cancel()
+        status, retcode = resp.get("status"), resp.get("retcode")
+        if status not in (None, "ok") or retcode not in (None, 0) or (status is None and retcode is None):
+            raise ActionError(f"{action} 失败（status={status}, retcode={retcode}）："
+                              f"{resp.get('message') or resp.get('wording') or '协议端未说明原因'}")
         return resp.get("data")
 
     async def send_group(self, group_id: int, message: list[dict]):

@@ -296,8 +296,15 @@ class Bot:
         key = "card.saved_other" if owner != uid else "card.saved"
         await self.send(("private", uid), key, name=name, qq=owner)
         group = self.settings.get("card_announce_group")
-        if group:
-            await self.send(("group", group), "card.announce", qq=owner, name=name)
+        if not group:
+            log.info("未发送存卡通知：存卡通知群为空（card_announce_group），归属 QQ %s", owner)
+            return
+        segs = self.templates.render("card.announce", str(group), qq=owner, name=name)
+        if not segs:
+            log.info("未发送存卡通知：群 %s 的文案为空（card.announce），归属 QQ %s", group, owner)
+            return
+        if await self.deliver(("group", group), segs, "card.announce"):
+            log.info("存卡通知已提交到群 %s：归属 QQ %s，卡名「%s」", group, owner, name)
 
     async def download_image(self, image: dict) -> bytes:
         """QQ 图片链接会过期，收到就下载。直接下载失败时，向协议端要一个新链接再试。"""
@@ -321,7 +328,7 @@ class Bot:
         if segs:
             await self.deliver(target, segs, key)
 
-    async def deliver(self, target: tuple[str, int], segs: list[dict], label: str) -> None:
+    async def deliver(self, target: tuple[str, int], segs: list[dict], label: str) -> bool:
         kind, target_id = target
         try:
             if kind == "group":
@@ -330,6 +337,8 @@ class Bot:
                 await self.onebot.send_private(target_id, segs)
         except ActionError as e:
             log.error("发送 %s 到 %s %s 失败：%s", label, kind, target_id, e)
+            return False
+        return True
 
     async def record(self, group_id: int, qq: int, name: str, source: str, reply_key: str,
                      announce_key: str, **values) -> None:

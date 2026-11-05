@@ -65,6 +65,7 @@ powershell -ExecutionPolicy Bypass -File scripts\autostart.ps1
 - **备份**：每周自动一次。想立即备份：`uv run python -m sidecar backup`。
 - **恢复**：先关掉 start.bat 的窗口，再运行 `uv run python -m sidecar restore 备份目录\db\sidecar-日期.db`，输入 yes 确认。原来的数据库会改名留底，不会直接覆盖丢失。
 - **日志**：`data\logs\`，按天保留 14 天。
+- **存卡成功但群里没通知**：检查后台「存卡通知群」是否为 `779254872`，以及「存卡群通知」文案是否为空。更新代码后需重启旁路服务。日志会记录通知未发送的原因、群消息接口的错误码，或「存卡通知已提交到群」；后者表示协议端接受了请求。
 - **更新本服务**：关掉 start.bat 的窗口，在仓库目录运行 `git pull`，再双击 `scripts\start.bat`。
 
 ## 管理员代存人物卡

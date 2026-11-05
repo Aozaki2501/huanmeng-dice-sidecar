@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from sidecar import db
 from sidecar.config import Config, hash_password
-from sidecar.onebot import ActionError
+from sidecar.onebot import ActionError, OneBot
 from sidecar.web import create_app
 from test_ledger import BOT_QQ, P, FakeBot, feed
 
@@ -364,6 +364,60 @@ def test_announcement_failure_keeps_saved_card(announcing_bot, caplog):
     assert "card.announce" in caplog.text and "779254872" in caplog.text
     feed(bot, pm(P[1], ".取卡 调查员A"))
     assert bot.sent[-1] == ("private", P[1], "[image]")
+
+
+@pytest.mark.parametrize("failure", ["private_timeout", "group_timeout", "group_failure"])
+def test_announcement_with_real_action_response_handling(announcing_bot, caplog, failure):
+    import json
+
+    bot = announcing_bot
+    requests = []
+    caplog.set_level("INFO", logger="bot")
+
+    class WS:
+        async def send(self, raw):
+            request = json.loads(raw)
+            requests.append(request)
+            action = request["action"]
+            if (failure == "private_timeout" and action == "send_private_msg") or \
+                    (failure == "group_timeout" and action == "send_group_msg"):
+                return
+            response = {"status": "ok", "retcode": 0, "echo": request["echo"], "data": {"message_id": 123}}
+            if failure == "group_failure" and action == "send_group_msg":
+                response.update(retcode=1400, message="禁止发言")
+            bot.onebot._dispatch(json.dumps(response))
+
+    async def call(action, **params):
+        return await OneBot.call(bot.onebot, action, timeout=0.01, **params)
+
+    bot.onebot.ws = WS()
+    bot.onebot.call = call
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True))
+    assert bot.cards.file(bot.cards.current(P[1])[0]).read_bytes() == PNG
+    assert [r["action"] for r in requests] == ["send_private_msg", "send_group_msg"]
+    assert requests[-1]["params"]["group_id"] == 779254872
+    assert bot.onebot._pending == {}
+    if failure == "private_timeout":
+        assert "send_private_msg 超时" in caplog.text
+        assert "存卡通知已提交到群 779254872" in caplog.text
+    else:
+        assert "card.announce" in caplog.text
+        assert "存卡通知已提交" not in caplog.text
+        assert ("send_group_msg 超时" if failure == "group_timeout" else "retcode=1400") in caplog.text
+
+
+@pytest.mark.parametrize("disabled", ["group", "template"])
+def test_disabled_announcement_is_logged(announcing_bot, caplog, disabled):
+    bot = announcing_bot
+    caplog.set_level("INFO", logger="bot")
+    if disabled == "group":
+        bot.settings.update({"card_announce_group": None}, "test")
+    else:
+        bot.templates.save("card.announce", [""], "test", scope="779254872")
+    feed(bot, pm(P[1], ".存卡 调查员A", image=True))
+    assert not any(kind == "group" for kind, _, _ in bot.sent)
+    assert "未发送存卡通知" in caplog.text
+    assert ("存卡通知群为空" if disabled == "group" else "文案为空") in caplog.text
 
 
 def test_web_announcement_settings_and_template_apply_immediately(tmp_path, announcing_bot):

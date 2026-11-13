@@ -351,6 +351,11 @@ class Bot:
         if main and main != group_id:
             await self.send(("group", main), announce_key, **values)
         await self.refresh_notice()
+        admin_group = self.settings.get("admin_group")
+        if admin_group:
+            await self.deliver(("group", admin_group), [{"type": "text", "data": {
+                "text": f"【记团身份】{person.name}（QQ：{qq}）"
+            }}], "记团身份通知")
 
     async def is_main_group_admin(self, user_id: int, *, include_ledger_admins: bool = True) -> bool:
         if include_ledger_admins and user_id in self.settings.get("ledger_admins"):
@@ -441,8 +446,8 @@ class Bot:
             await self.send(("group", group_id), key, **out.values)
 
     # ---------- 团账本 ----------
-    def ledger_list_text(self, with_qq: bool = False) -> str:
-        """`.团` 的名单。群公告里每行后面加 QQ 号（with_qq），方便管理对上人。"""
+    def ledger_list_text(self) -> str:
+        """`.团` 和群公告使用的名单。"""
         lines = [self.templates.render_text("ledger.title") or ""]
         rule = "————————————"
         lines.append(rule)
@@ -450,7 +455,7 @@ class Bot:
         if link:
             lines += ["全部名单：", link, rule]
         people = self.ledger.people()
-        lines += [f"{p.entry} {p.qq}" if with_qq else p.entry for p in people] if people else [self.templates.render_text("ledger.empty") or ""]
+        lines += [p.entry for p in people] if people else [self.templates.render_text("ledger.empty") or ""]
         return "\n".join(line for line in lines if line)
 
     async def send_ledger_list(self, target) -> None:
@@ -468,7 +473,7 @@ class Bot:
                 notices = await self.onebot.call("_get_group_notice", group_id=main) or []
                 old = [n["notice_id"] for n in notices if n.get("sender_id") == self.onebot.self_id
                        and html.unescape((n.get("message") or {}).get("text", "")).split("\n")[0] in marks]
-                await self.onebot.call("_send_group_notice", group_id=main, content=self.ledger_list_text(with_qq=True),
+                await self.onebot.call("_send_group_notice", group_id=main, content=self.ledger_list_text(),
                                        is_show_edit_card=0, tip_window_type=1, confirm_required=0)
                 for notice_id in old:
                     await self.onebot.call("_del_group_notice", group_id=main, notice_id=notice_id)

@@ -241,7 +241,7 @@ def msg(group, user, text, role="member"):
 @pytest.fixture
 def fb(tmp_path):
     bot = FakeBot(db.connect(tmp_path / "t.db"), tmp_path)
-    bot.settings.update({"main_group": 100, "repeat_groups": [100, 200]}, "test")
+    bot.settings.update({"main_group": 100, "admin_group": None, "repeat_groups": [100, 200]}, "test")
     return bot
 
 
@@ -282,6 +282,24 @@ def test_repeat_in_small_group_announces_twice(fb):
 def test_repeat_in_main_group_announces_once(fb):
     feed(fb, *(msg(100, P[i], "草") for i in range(1, 5)), msg(100, P[9], "停"))
     assert len(fb.sent) == 1
+
+
+def test_auto_record_notifies_admin_group_with_ledger_name_and_qq(fb):
+    fb.settings.update({"admin_group": 300}, "test")
+    fb.ledger.rename(P[2], "圈名", "test")
+    feed(fb, *(msg(200, P[i], "草") for i in range(1, 5)), msg(200, P[9], "停"))
+    assert fb.sent[-1] == ("group", 300, f"【记团身份】圈名（QQ：{P[2]}）")
+    assert "圈名（" in fb.notices[-1]["message"]["text"]
+    assert str(P[2]) not in fb.notices[-1]["message"]["text"]
+
+
+def test_notice_saves_space_by_omitting_qq(fb):
+    items = [(100000000 + i, f"成员{i}", [date(2026, 12, 1)]) for i in range(30)]
+    fb.ledger.import_people(items, "test")
+    text = fb.ledger_list_text()
+    assert len(text) <= 600 < len(text) + sum(len(str(qq)) + 1 for qq, _, _ in items)
+    asyncio.run(fb.refresh_notice())
+    assert fb.notices[-1]["message"]["text"].replace("&#10;", "\n") == text
 
 
 def test_ignored_bot_is_invisible(fb):
@@ -428,7 +446,7 @@ def test_ledger_change_replaces_group_notice(fb):
     feed(fb, msg(200, P[6], ".团 加 10001 巧克力 7/20"))
     ids = [n["notice_id"] for n in fb.notices]
     assert ids[:2] == ["rules", "human"] and len(ids) == 3
-    assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20） 10001")
+    assert fb.notices[-1]["message"]["text"].endswith("&#10;巧克力（7/20）")
     feed(fb, msg(100, P[6], ".团 消 巧克力"))
     assert len(fb.notices) == 3 and fb.notices[-1]["message"]["text"].endswith("&#10;暂无。")
 
@@ -481,7 +499,7 @@ def test_admin_renames_other_and_notice_updates(fb):
                     {"type": "text", "data": {"text": " Flame 酱"}}]
     feed(fb, e)
     assert fb.sent[-1][2] == "名单上的「名片10002」已改为「Flame 酱」。"
-    assert fb.notices[-1]["message"]["text"].endswith("Flame 酱（" + fb.ledger.person(P[2]).entry.split("（")[1] + f" {P[2]}")
+    assert fb.notices[-1]["message"]["text"].endswith(fb.ledger.person(P[2]).entry)
     feed(fb, msg(200, P[2], ".团 我"))
     assert fb.sent[-1][2].startswith("Flame 酱（")
 
